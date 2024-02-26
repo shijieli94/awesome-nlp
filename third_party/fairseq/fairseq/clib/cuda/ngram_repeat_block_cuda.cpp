@@ -6,18 +6,10 @@ Licensed under the MIT License.
 #include <torch/extension.h>
 #include <vector>
 
+#include "ngram_repeat_block_cuda.h"
 /*
 CPP Binding for CUDA OP
 */
-
-// CUDA forward declarations
-torch::Tensor ngram_repeat_block_cuda_forward(
-    torch::Tensor tokens,
-    torch::Tensor lprobs,
-    int bsz,
-    int step,
-    int beam_size,
-    int no_repeat_ngram_size);
 
 #define CHECK_CUDA(x) \
   TORCH_CHECK(x.type().is_cuda(), #x " must be a CUDA tensor")

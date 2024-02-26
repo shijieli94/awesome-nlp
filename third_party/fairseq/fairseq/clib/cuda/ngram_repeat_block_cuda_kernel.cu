@@ -13,9 +13,11 @@ Kernel implementation for blocking repeated n-grams.
 #include <torch/extension.h>
 #include <vector>
 
+#include "ngram_repeat_block_cuda.h"
+
 // Ban repeated ngrams of length = 'no_repeat_ngram_size'
 __global__ void banRepeatedTokens(
-    long* __restrict__ tokens,
+    int64_t* __restrict__ tokens,
     float* __restrict__ lprobs,
     int max_predict_len,
     int vocab_size,
@@ -29,7 +31,7 @@ __global__ void banRepeatedTokens(
   auto check_start_pos = blockDim.x;
   auto lprob_start = row * vocab_size;
   bool is_banned = true;
-  extern __shared__ long tokens_shm[];
+  extern __shared__ int64_t tokens_shm[];
   tokens_shm[col] = tokens[start];
   if (col == blockDim.x - 1) {
     for (int i = 1; i < no_repeat_ngram_size; i++) {
@@ -55,7 +57,7 @@ __global__ void banRepeatedTokens(
 // batch size and sequence length and launch
 // kernel
 torch::Tensor ngram_repeat_block_cuda_forward(
-    const torch::Tensor tokens,
+    torch::Tensor tokens,
     torch::Tensor lprobs,
     int bsz,
     int step,
@@ -66,10 +68,10 @@ torch::Tensor ngram_repeat_block_cuda_forward(
     return lprobs;
   int max_predict_len = tokens.size(1);
   int vocab_size = lprobs.size(1);
-  auto token_ptr = tokens.data_ptr<long>();
+  auto token_ptr = tokens.data_ptr<int64_t>();
   auto lprob_ptr = lprobs.data_ptr<float>();
   int blocks = bsz * beam_size;
-  int shared_mem_size = (step + 1) * sizeof(long);
+  int shared_mem_size = (step + 1) * sizeof(int64_t);
 
   // Launching N blocks where N is number of samples in a batch (beams*bsz)
   // Launching T threads where T is number of previous ngrams in a sample

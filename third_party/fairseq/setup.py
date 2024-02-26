@@ -105,21 +105,21 @@ extensions.extend(
 if "CUDA_HOME" in os.environ:
     extensions.extend(
         [
-            cpp_extension.CppExtension(
+            cpp_extension.CUDAExtension(
                 "fairseq.libnat_cuda",
                 sources=[
                     "fairseq/clib/libnat_cuda/edit_dist.cu",
                     "fairseq/clib/libnat_cuda/binding.cpp",
                 ],
             ),
-            cpp_extension.CppExtension(
+            cpp_extension.CUDAExtension(
                 "fairseq.ngram_repeat_block_cuda",
                 sources=[
                     "fairseq/clib/cuda/ngram_repeat_block_cuda.cpp",
                     "fairseq/clib/cuda/ngram_repeat_block_cuda_kernel.cu",
                 ],
             ),
-            cpp_extension.CppExtension(
+            cpp_extension.CUDAExtension(
                 "alignment_train_cuda_binding",
                 sources=[
                     "fairseq/clib/operators/alignment_train_kernel.cu",
