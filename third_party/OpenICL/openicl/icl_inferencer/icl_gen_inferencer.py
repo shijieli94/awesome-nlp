@@ -97,16 +97,16 @@ class GenInferencer(BaseInferencer):
         ice_idx_list = retriever.retrieve()
 
         # 3. Generate prompts for testing input
-        prompt_list = get_generation_prompt_list_from_retriever_indices(
+        prompt_list, input_column_list, output_column_list = get_generation_prompt_list_from_retriever_indices(
             ice_idx_list,
             retriever,
             self.tokenizer,
             self.gen_field_replace_token,
-            max_model_token_num=self.max_model_token_num,
+            max_model_token_num=self.max_model_token_num - self.generation_kwargs["max_new_tokens"],
             ice_template=ice_template,
             prompt_template=prompt_template,
         )
-        output_handler.save_results({"prompt": prompt_list})
+        output_handler.save_results({"prompt": prompt_list, "source": input_column_list, "target": output_column_list})
 
         # 4. Wrap prompts with Dataloader
         dataloader = get_dataloader(prompt_list, self.batch_size)
@@ -155,6 +155,8 @@ class GenInferencer(BaseInferencer):
 
             # 5-3. Save current output
             for prediction, output in zip(generated, complete_output):
+                # 5-4. If multiple extra lines were generated, only take the first one
+                prediction = prediction.split("\n")[0]
                 output_handler.save_result_with_index(index, {"prediction": prediction, "full_output": output})
                 index = index + 1
 

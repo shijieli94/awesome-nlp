@@ -109,6 +109,12 @@ class BaseRetriever:
         generated_ice = self.ice_separator.join(generated_ice_list) + self.ice_eos_token
         return generated_ice
 
+    def get_input_columns_from_index(self, idx):
+        return [self.test_ds[idx][ctx] for ctx in self.dataset_reader.input_columns]
+
+    def get_output_column_from_index(self, idx):
+        return self.test_ds[idx][self.dataset_reader.output_column]
+
     def generate_prompt(
         self,
         idx: int,
