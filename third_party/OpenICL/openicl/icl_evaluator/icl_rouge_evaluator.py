@@ -1,15 +1,12 @@
 """ROUGE evaluator"""
-
-import evaluate
 from openicl.icl_evaluator import BaseEvaluator
 
 
 class RougeEvaluator(BaseEvaluator):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(metric="rouge")
 
-    def score(self, predictions, references):
+    def score(self, predictions, references, **kwargs):
         assert len(predictions) == len(references)
-        metric = evaluate.load("rouge")
-        scores = metric.compute(predictions=predictions, references=references)
+        scores = self.metric.compute(predictions=predictions, references=references, **kwargs)
         return scores

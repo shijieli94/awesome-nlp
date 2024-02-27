@@ -1,14 +1,12 @@
 """Acc Evaluator"""
-
-import evaluate
 from openicl.icl_evaluator import BaseEvaluator
 
 
 class AccEvaluator(BaseEvaluator):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(metric="accuracy")
 
-    def score(self, predictions, references):
+    def score(self, predictions, references, **kwargs):
         assert len(predictions) == len(references)
         mapping_to_int_dict = {label: idx for idx, label in enumerate(set(map(str, references)))}
         pred_set = set(predictions)
@@ -17,5 +15,4 @@ class AccEvaluator(BaseEvaluator):
                 mapping_to_int_dict[str(pred)] = len(mapping_to_int_dict)
         golds = [mapping_to_int_dict[str(gold)] for gold in references]
         preds = [mapping_to_int_dict[str(pred)] for pred in predictions]
-        metric = evaluate.load("accuracy")
-        return metric.compute(references=golds, predictions=preds)
+        return self.metric.compute(references=golds, predictions=preds, **kwargs)
