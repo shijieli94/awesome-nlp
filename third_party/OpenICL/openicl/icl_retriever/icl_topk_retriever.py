@@ -1,6 +1,5 @@
-"""Topk Retriever"""
-
-import copy
+import logging
+import os
 from typing import Optional
 
 import faiss
@@ -9,15 +8,11 @@ import torch
 import tqdm
 from accelerate import Accelerator
 from openicl import DatasetReader
-from openicl.icl_dataset_reader import DatasetEncoder
 from openicl.icl_retriever import BaseRetriever
-from openicl.utils.collators import DataCollatorWithPaddingAndCuda
-from openicl.utils.logging import get_logger
+from openicl.utils.icl_common_utils import get_dataloader
 from sentence_transformers import SentenceTransformer
-from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class TopkRetriever(BaseRetriever):
@@ -49,13 +44,16 @@ class TopkRetriever(BaseRetriever):
         ice_separator: Optional[str] = "\n",
         ice_eos_token: Optional[str] = "\n",
         prompt_eos_token: Optional[str] = "",
-        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
         ice_num: Optional[int] = 1,
         index_split: Optional[str] = "train",
         test_split: Optional[str] = "test",
-        tokenizer_name: Optional[str] = "gpt2-xl",
-        batch_size: Optional[int] = 1,
         accelerator: Optional[Accelerator] = None,
+        # TopkRetriever
+        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
+        cache_dir: Optional[str] = None,
+        batch_size: Optional[int] = 1,
+        index_file: Optional[str] = None,
+        move_nearest_to_end: bool = False,
     ) -> None:
         super().__init__(
             dataset_reader,
@@ -69,61 +67,58 @@ class TopkRetriever(BaseRetriever):
         )
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.batch_size = batch_size
-        self.tokenizer_name = tokenizer_name
+        self.move_nearest_to_end = move_nearest_to_end
+
         gen_datalist = self.dataset_reader.generate_input_field_corpus(self.test_ds)
+        self.dataloader = get_dataloader(gen_datalist, batch_size)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-        self.tokenizer.padding_side = "right"
-
-        self.encode_dataset = DatasetEncoder(gen_datalist, tokenizer=self.tokenizer)
-        co = DataCollatorWithPaddingAndCuda(tokenizer=self.tokenizer, device=self.device)
-        self.dataloader = DataLoader(self.encode_dataset, batch_size=self.batch_size, collate_fn=co)
-
-        self.model = SentenceTransformer(sentence_transformers_model_name)
-
+        self.model = SentenceTransformer(sentence_transformers_model_name, cache_folder=cache_dir)
         self.model = self.model.to(self.device)
         self.model.eval()
 
-        self.index = self.create_index()
+        if index_file is not None and os.path.isfile(index_file):
+            self.index = faiss.read_index(index_file)
+        else:
+            self.index = self.create_index(index_file)
 
-    def create_index(self):
+    def create_index(self, index_file):
         self.select_datalist = self.dataset_reader.generate_input_field_corpus(self.index_ds)
-        encode_datalist = DatasetEncoder(self.select_datalist, tokenizer=self.tokenizer)
-        co = DataCollatorWithPaddingAndCuda(tokenizer=self.tokenizer, device=self.device)
-        dataloader = DataLoader(encode_datalist, batch_size=self.batch_size, collate_fn=co)
+        dataloader = get_dataloader(self.select_datalist, self.batch_size)
+
         index = faiss.IndexIDMap(faiss.IndexFlatIP(self.model.get_sentence_embedding_dimension()))
         res_list = self.forward(dataloader, process_bar=True, information="Creating index for index set...")
-        id_list = np.array([res["metadata"]["id"] for res in res_list])
+        id_list = np.array([res["id"] for res in res_list])
         self.embed_list = np.stack([res["embed"] for res in res_list])
         index.add_with_ids(self.embed_list, id_list)
+        faiss.write_index(index, index_file)
         return index
-
-    def knn_search(self, ice_num):
-        res_list = self.forward(self.dataloader, process_bar=True, information="Embedding test set...")
-        rtr_idx_list = [[] for _ in range(len(res_list))]
-        logger.info("Retrieving data for test set...")
-        for entry in tqdm.tqdm(res_list, disable=not self.is_main_process):
-            idx = entry["metadata"]["id"]
-            embed = np.expand_dims(entry["embed"], axis=0)
-            near_ids = self.index.search(embed, ice_num)[1][0].tolist()
-            rtr_idx_list[idx] = near_ids
-        return rtr_idx_list
 
     def forward(self, dataloader, process_bar=False, information=""):
         res_list = []
-        _dataloader = copy.deepcopy(dataloader)
         if process_bar:
             logger.info(information)
-            _dataloader = tqdm.tqdm(_dataloader, disable=not self.is_main_process)
-        for _, entry in enumerate(_dataloader):
+            dataloader = tqdm.tqdm(dataloader, disable=not self.is_main_process)
+
+        idx = 0
+        for _, entry in enumerate(dataloader):
             with torch.no_grad():
-                metadata = entry.pop("metadata")
-                raw_text = self.tokenizer.batch_decode(entry["input_ids"], skip_special_tokens=True, verbose=False)
-                res = self.model.encode(raw_text, show_progress_bar=False)
-            res_list.extend([{"embed": r, "metadata": m} for r, m in zip(res, metadata)])
+                embeddings = self.model.encode(entry, show_progress_bar=False)
+
+            for embed in embeddings:
+                res_list.append({"embed": embed, "id": idx})
+                idx += 1
+
         return res_list
 
     def retrieve(self):
-        return self.knn_search(self.ice_num)
+        res_list = self.forward(self.dataloader, process_bar=True, information="Embedding test set...")
+        rtr_idx_list = [[] for _ in res_list]
+        logger.info("Retrieving data for test set...")
+
+        embed_list = np.stack([res["embed"] for res in res_list])
+        near_ids_list = self.index.search(embed_list, self.ice_num)[1].tolist()
+        for idx, near_ids in enumerate(near_ids_list):
+            if self.move_nearest_to_end:
+                near_ids = list(reversed(near_ids))
+            rtr_idx_list[idx] = near_ids
+        return rtr_idx_list

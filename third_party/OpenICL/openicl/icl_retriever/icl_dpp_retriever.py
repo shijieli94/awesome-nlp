@@ -1,23 +1,20 @@
-"""DPP Retriever"""
-
+import logging
 import math
 from typing import Optional
 
 import numpy as np
-import tqdm
 from accelerate import Accelerator
 from openicl import DatasetReader
 from openicl.icl_retriever.icl_topk_retriever import TopkRetriever
-from openicl.utils.logging import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class DPPRetriever(TopkRetriever):
     """DPP In-context Learning Retriever Class
         Class of DPP Retriever.
         Two-stage DPP is used, where first stage is to get results of TopK to reduce candidate sets
-        chechout https://arxiv.org/abs/2302.05698 for details.
+        checkout https://arxiv.org/abs/2302.05698 for details.
 
     Attributes:
         dataset_reader (:obj:`DatasetReader`): An instance of the :obj:`DatasetReader` class.
@@ -46,15 +43,18 @@ class DPPRetriever(TopkRetriever):
         ice_separator: Optional[str] = "\n",
         ice_eos_token: Optional[str] = "\n",
         prompt_eos_token: Optional[str] = "",
-        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
         ice_num: Optional[int] = 1,
-        candidate_num: Optional[int] = 1,
         index_split: Optional[str] = "train",
         test_split: Optional[str] = "test",
-        tokenizer_name: Optional[str] = "gpt2-xl",
-        batch_size: Optional[int] = 1,
         accelerator: Optional[Accelerator] = None,
-        seed: Optional[int] = 1,
+        # TopkRetriever
+        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
+        cache_dir: Optional[str] = None,
+        batch_size: Optional[int] = 1,
+        index_file: Optional[str] = None,
+        move_nearest_to_end: bool = False,
+        # DPPRetriever
+        candidate_num: Optional[int] = 100,
         scale_factor: Optional[float] = 0.1,
     ) -> None:
         super().__init__(
@@ -62,69 +62,66 @@ class DPPRetriever(TopkRetriever):
             ice_separator,
             ice_eos_token,
             prompt_eos_token,
-            sentence_transformers_model_name,
             ice_num,
             index_split,
             test_split,
-            tokenizer_name,
-            batch_size,
             accelerator,
+            sentence_transformers_model_name,
+            cache_dir,
+            batch_size,
+            index_file,
+            move_nearest_to_end,
         )
         self.candidate_num = candidate_num
-        self.seed = seed
         self.scale_factor = scale_factor
 
-    def dpp_search(self):
-        res_list = self.forward(self.dataloader, process_bar=True, information="Embedding test set...")
-        rtr_idx_list = [[] for _ in range(len(res_list))]
-        logger.info("Retrieving data for test set...")
-        for entry in tqdm.tqdm(res_list, disable=not self.is_main_process):
-            idx = entry["metadata"]["id"]
-
-            # get TopK results
-            embed = np.expand_dims(entry["embed"], axis=0)
-            near_ids = np.array(self.index.search(embed, self.candidate_num)[1][0].tolist())
-
-            # DPP stage
-            near_reps, rel_scores, kernel_matrix = self.get_kernel(embed, near_ids.tolist())
-
-            # MAP inference
-            samples_ids = fast_map_dpp(kernel_matrix, self.ice_num)
-
-            # ordered by relevance score
-            samples_scores = np.array([rel_scores[i] for i in samples_ids])
-            samples_ids = samples_ids[(-samples_scores).argsort()].tolist()
-            rtr_sub_list = [int(near_ids[i]) for i in samples_ids]
-
-            rtr_idx_list[idx] = rtr_sub_list
-
-        return rtr_idx_list
-
-    def retrieve(self):
-        return self.dpp_search()
-
     def get_kernel(self, embed, candidates):
-        near_reps = np.stack([self.index.index.reconstruct(i) for i in candidates], axis=0)
+        near_reps = np.array([[self.index.index.reconstruct(i) for i in candidate] for candidate in candidates])
+
         # normalize first
-        embed = embed / np.linalg.norm(embed)
-        near_reps = near_reps / np.linalg.norm(near_reps, keepdims=True, axis=1)
+        embed = embed / np.linalg.norm(embed, keepdims=True, axis=-1)
+        near_reps = near_reps / np.linalg.norm(near_reps, keepdims=True, axis=-1)
 
         # to make kernel-matrix non-negative
-        rel_scores = np.matmul(embed, near_reps.T)[0]
+        rel_scores = np.einsum("bd,bkd->bk", embed, near_reps)
         rel_scores = (rel_scores + 1) / 2
 
         # to prevent overflow error
-        rel_scores -= rel_scores.max()
+        rel_scores -= rel_scores.max(keepdims=True, axis=-1)
 
         # to balance relevance and diversity
         rel_scores = np.exp(rel_scores / (2 * self.scale_factor))
 
         # to make kernel-matrix non-negative
-        sim_matrix = np.matmul(near_reps, near_reps.T)
+        sim_matrix = np.matmul(near_reps, near_reps.transpose(0, 2, 1))
         sim_matrix = (sim_matrix + 1) / 2
 
-        kernel_matrix = rel_scores[None] * sim_matrix * rel_scores[:, None]
+        kernel_matrix = rel_scores[:, None, :] * sim_matrix * rel_scores[:, :, None]
         return near_reps, rel_scores, kernel_matrix
+
+    def retrieve(self):
+        res_list = self.forward(self.dataloader, process_bar=True, information="Embedding test set...")
+        rtr_idx_list = [[] for _ in range(len(res_list))]
+        logger.info("Retrieving data for test set...")
+
+        embed_list = np.stack([res["embed"] for res in res_list])
+        near_ids_list = self.index.search(embed_list, self.candidate_num)[1].tolist()
+
+        # DPP stage
+        near_reps, rel_scores, kernel_matrix = self.get_kernel(embed_list, near_ids_list)
+
+        for idx, near_ids in enumerate(near_ids_list):
+            # MAP inference
+            samples_ids = fast_map_dpp(kernel_matrix[idx], self.ice_num)
+
+            # recover the original idx
+            rtr_sub_list = [near_ids[i] for i in samples_ids]
+
+            if self.move_nearest_to_end:
+                rtr_sub_list = list(reversed(rtr_sub_list))
+            rtr_idx_list[idx] = rtr_sub_list
+
+        return rtr_idx_list
 
 
 def fast_map_dpp(kernel_matrix, max_length):
@@ -149,4 +146,4 @@ def fast_map_dpp(kernel_matrix, max_length):
         di2s -= np.square(eis)
         selected_item = np.argmax(di2s)
         selected_items.append(int(selected_item))
-    return selected_items
+    return np.array(selected_items)

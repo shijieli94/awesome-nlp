@@ -1,18 +1,16 @@
-"""MDL Retriever"""
-
+import logging
 from typing import List, Optional
 
 import numpy as np
 import torch
 import tqdm
 from accelerate import Accelerator
-from openicl import DatasetReader, PromptTemplate
+from openicl import DatasetReader
 from openicl.icl_retriever.icl_topk_retriever import TopkRetriever
 from openicl.utils.calculate import entropy
-from openicl.utils.logging import get_logger
 from transformers import AutoModelForCausalLM
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class MDLRetriever(TopkRetriever):
@@ -48,18 +46,20 @@ class MDLRetriever(TopkRetriever):
         ice_separator: Optional[str] = "\n",
         ice_eos_token: Optional[str] = "\n",
         prompt_eos_token: Optional[str] = "",
-        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
         ice_num: Optional[int] = 1,
-        candidate_num: Optional[int] = 1,
         index_split: Optional[str] = "train",
         test_split: Optional[str] = "test",
-        tokenizer_name: Optional[str] = "gpt2-xl",
-        ce_model_name: Optional[str] = "gpt2-xl",
-        batch_size: Optional[int] = 1,
-        select_time: Optional[int] = 5,
         accelerator: Optional[Accelerator] = None,
-        ice_template: Optional[PromptTemplate] = None,
-        prompt_template: Optional[PromptTemplate] = None,
+        # TopkRetriever
+        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
+        cache_dir: Optional[str] = None,
+        batch_size: Optional[int] = 1,
+        index_file: Optional[str] = None,
+        move_nearest_to_end: bool = False,
+        # MDLRetriever
+        candidate_num: Optional[int] = 1,
+        ce_model_name: Optional[str] = None,
+        select_time: Optional[int] = 5,
         labels: Optional[List] = None,
         seed: Optional[int] = 1,
     ) -> None:
@@ -68,19 +68,19 @@ class MDLRetriever(TopkRetriever):
             ice_separator,
             ice_eos_token,
             prompt_eos_token,
-            sentence_transformers_model_name,
             ice_num,
             index_split,
             test_split,
-            tokenizer_name,
-            batch_size,
             accelerator,
+            sentence_transformers_model_name,
+            cache_dir,
+            batch_size,
+            index_file,
+            move_nearest_to_end,
         )
-        self.ce_model_name = ce_model_name
         self.candidate_num = candidate_num
+        self.ce_model_name = ce_model_name
         self.select_time = select_time
-        self.ice_template = ice_template
-        self.prompt_template = prompt_template
         self.labels = labels
         self.seed = seed
 
@@ -91,7 +91,7 @@ class MDLRetriever(TopkRetriever):
 
         logger.info("Retrieving data for test set...")
         for entry in tqdm.tqdm(res_list, disable=not self.is_main_process):
-            idx = entry["metadata"]["id"]
+            idx = entry["id"]
 
             embed = np.expand_dims(entry["embed"], axis=0)
             near_ids = self.index.search(embed, min(self.candidate_num, len(self.index_ds)))[1][0].tolist()
@@ -126,13 +126,10 @@ class MDLRetriever(TopkRetriever):
 
         return rtr_idx_list
 
-    def retrieve(self):
-        return self.topk_search()
-
     def cal_ce(self, input_texts: List[str], mask_length=None):
         if self.metric_model is None:
             logger.info(f"Load model {self.metric_model} for calculating MDL...")
-            self.metric_model = AutoModelForCausalLM.from_pretrained(self.ce_model_name)
+            self.metric_model = AutoModelForCausalLM.from_pretrained(self.ce_model_name, cache_dir=self.cache_dir)
             self.metric_model.to(self.device)
         inputs = self.tokenizer(input_texts, padding=True, return_tensors="pt", truncation=True)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
@@ -160,3 +157,6 @@ class MDLRetriever(TopkRetriever):
             lens -= mask_length
         ce_loss = loss.sum(-1).cpu().detach().numpy() / lens
         return ce_loss
+
+    def retrieve(self):
+        return self.topk_search()

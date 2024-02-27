@@ -1,7 +1,3 @@
-"""Votek Retriever"""
-
-import json
-import os
 import random
 from collections import defaultdict
 from typing import Optional
@@ -41,79 +37,66 @@ class VotekRetriever(TopkRetriever):
         ice_separator: Optional[str] = "\n",
         ice_eos_token: Optional[str] = "\n",
         prompt_eos_token: Optional[str] = "",
-        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
         ice_num: Optional[int] = 1,
         index_split: Optional[str] = "train",
         test_split: Optional[str] = "test",
-        tokenizer_name: Optional[str] = "gpt2-xl",
+        accelerator: Optional[Accelerator] = None,
+        sentence_transformers_model_name: Optional[str] = "all-mpnet-base-v2",
+        cache_dir: Optional[str] = None,
         batch_size: Optional[int] = 1,
         votek_k: Optional[int] = 3,
-        accelerator: Optional[Accelerator] = None,
     ) -> None:
         super().__init__(
             dataset_reader,
             ice_separator,
             ice_eos_token,
             prompt_eos_token,
-            sentence_transformers_model_name,
             ice_num,
             index_split,
             test_split,
-            tokenizer_name,
-            batch_size,
             accelerator,
+            sentence_transformers_model_name,
+            cache_dir,
+            batch_size,
         )
         self.votek_k = votek_k
+        self._init_votek_index(overlap_threshold=1)
 
-    def votek_select(self, embeddings=None, select_num=None, k=None, overlap_threshold=None, vote_file=None):
-        n = len(embeddings)
-        if vote_file is not None and os.path.isfile(vote_file):
-            with open(vote_file) as f:
-                vote_stat = json.load(f)
-        else:
-            vote_stat = defaultdict(list)
+    def _init_votek_index(self, overlap_threshold=None):
+        vote_stat = defaultdict(list)
 
-            for i in range(n):
-                cur_emb = embeddings[i].reshape(1, -1)
-                cur_scores = np.sum(cosine_similarity(embeddings, cur_emb), axis=1)
-                sorted_indices = np.argsort(cur_scores).tolist()[-k - 1 : -1]
-                for idx in sorted_indices:
-                    if idx != i:
-                        vote_stat[idx].append(i)
+        for i, cur_emb in enumerate(self.embed_list):
+            cur_emb = cur_emb.reshape(1, -1)
+            cur_scores = np.sum(cosine_similarity(self.embed_list, cur_emb), axis=1)
+            sorted_indices = np.argsort(cur_scores).tolist()[-self.votek_k - 1 :]
+            assert sorted_indices[-1] == i
+            for idx in sorted_indices[:-1]:
+                vote_stat[idx].append(i)
 
-            if vote_file is not None:
-                with open(vote_file, "w") as f:
-                    json.dump(vote_stat, f)
         votes = sorted(vote_stat.items(), key=lambda x: len(x[1]), reverse=True)
-        j = 0
-        selected_indices = []
-        while len(selected_indices) < select_num and j < len(votes):
+
+        self.selected_indices = []
+        unselected_indices = []
+
+        for j in range(len(votes)):
             candidate_set = set(votes[j][1])
             flag = True
             for pre in range(j):
-                cur_set = set(votes[pre][1])
-                if len(candidate_set.intersection(cur_set)) >= overlap_threshold * len(candidate_set):
+                pre_set = set(votes[pre][1])
+                if len(candidate_set.intersection(pre_set)) >= overlap_threshold * len(candidate_set):
                     flag = False
                     break
-            if not flag:
-                j += 1
-                continue
-            selected_indices.append(int(votes[j][0]))
-            j += 1
-        if len(selected_indices) < select_num:
-            unselected_indices = []
-            cur_num = len(selected_indices)
-            for i in range(n):
-                if not i in selected_indices:
-                    unselected_indices.append(i)
-            selected_indices += random.sample(unselected_indices, select_num - cur_num)
-        return selected_indices
 
-    def vote_k_search(self):
-        vote_k_idxs = self.votek_select(
-            embeddings=self.embed_list, select_num=self.ice_num, k=self.votek_k, overlap_threshold=1
-        )
-        return [vote_k_idxs[:] for _ in range(len(self.test_ds))]
+            if flag:
+                self.selected_indices.append(int(votes[j][0]))
+            else:
+                unselected_indices += int(votes[j][0])
+
+            if len(self.selected_indices) >= self.ice_num:
+                break
+
+        if len(self.selected_indices) < self.ice_num:
+            self.selected_indices += random.sample(unselected_indices, self.ice_num - len(self.selected_indices))
 
     def retrieve(self):
-        return self.vote_k_search()
+        return [self.selected_indices[:] for _ in range(len(self.test_ds))]

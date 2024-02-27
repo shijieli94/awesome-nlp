@@ -1,15 +1,13 @@
-"""Random Retriever"""
-
+import logging
 from typing import Optional
 
 import numpy as np
 from accelerate import Accelerator
 from openicl import DatasetReader
 from openicl.icl_retriever import BaseRetriever
-from openicl.utils.logging import get_logger
 from tqdm import trange
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class RandomRetriever(BaseRetriever):
@@ -39,8 +37,9 @@ class RandomRetriever(BaseRetriever):
         ice_num: Optional[int] = 1,
         index_split: Optional[str] = "train",
         test_split: Optional[str] = "test",
-        seed: Optional[int] = 43,
         accelerator: Optional[Accelerator] = None,
+        # RandomRetriever
+        seed: Optional[int] = 43,
     ) -> None:
         super().__init__(
             dataset_reader,
