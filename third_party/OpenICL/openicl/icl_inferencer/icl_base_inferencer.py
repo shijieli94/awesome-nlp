@@ -39,8 +39,9 @@ class BaseInferencer:
 
     def __init__(
         self,
-        model_name: Optional[Union[str, Any]] = "gpt2-xl",
+        model_name: Optional[Union[str, Any]] = None,
         tokenizer_name: Optional[Union[str, Any]] = None,
+        cache_dir: Optional[str] = None,
         max_model_token_num: Optional[int] = None,
         model_config: Optional[PretrainedConfig] = None,
         batch_size: Optional[int] = 1,
@@ -53,6 +54,7 @@ class BaseInferencer:
     ) -> None:
         self.model_name = model_name
         self.tokenizer_name = tokenizer_name if tokenizer_name is not None else model_name
+        self.cache_dir = cache_dir
         self.accelerator = accelerator
         self.is_main_process = True if self.accelerator is None or self.accelerator.is_main_process else False
         self.api_name = api_name
@@ -121,7 +123,7 @@ class BaseInferencer:
                 self.model = self.__get_hf_model_from_name(model_name)
         else:
             if model_config is None:
-                model_config = AutoConfig.from_pretrained(model_name)
+                model_config = AutoConfig.from_pretrained(model_name, cache_dir=self.cache_dir)
             with init_empty_weights():
                 empty_model = AutoModelForCausalLM.from_config(model_config)
 
@@ -132,6 +134,7 @@ class BaseInferencer:
 
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
+                cache_dir=self.cache_dir,
                 device_map=device_map,
                 offload_folder="offload",
                 offload_state_dict=True,
@@ -140,9 +143,9 @@ class BaseInferencer:
 
     def __get_hf_model_from_name(self, model_name):
         if "t5" in model_name:
-            return T5ForConditionalGeneration.from_pretrained(model_name)
+            return T5ForConditionalGeneration.from_pretrained(model_name, cache_dir=self.cache_dir)
         else:
-            return AutoModelForCausalLM.from_pretrained(model_name)
+            return AutoModelForCausalLM.from_pretrained(model_name, cache_dir=self.cache_dir)
 
     def __get_hf_model_from_config(self, model_name, model_config):
         if "t5" in model_name:
@@ -152,12 +155,14 @@ class BaseInferencer:
 
     def __init_tokenizer(self, tokenizer_name):
         if self.api_name == "opt-175b":
-            self.tokenizer = GPT2Tokenizer.from_pretrained("facebook/opt-30b", use_fast=False)
+            self.tokenizer = GPT2Tokenizer.from_pretrained(
+                "facebook/opt-30b", use_fast=False, cache_dir=self.cache_dir
+            )
         else:
             if not isinstance(tokenizer_name, str):
                 self.tokenizer = tokenizer_name
             else:
-                self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+                self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, cache_dir=self.cache_dir)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
         self.tokenizer.padding_side = "left"

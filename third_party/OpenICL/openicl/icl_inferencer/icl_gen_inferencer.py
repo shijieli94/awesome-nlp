@@ -42,23 +42,26 @@ class GenInferencer(BaseInferencer):
 
     def __init__(
         self,
-        model_name: Optional[str] = "gpt2-xl",
+        model_name: Optional[str] = None,
         tokenizer_name: Optional[str] = None,
+        cache_dir: Optional[str] = None,
         max_model_token_num: Optional[int] = None,
         model_config: Optional[PretrainedConfig] = None,
         batch_size: Optional[int] = 1,
-        gen_field_replace_token: Optional[str] = "",
-        generation_kwargs={"max_new_tokens": 100},
         accelerator: Optional[Accelerator] = None,
         output_json_filepath: Optional[str] = "./icl_inference_output",
         output_json_filename: Optional[str] = "predictions",
         api_name: Optional[str] = None,
         model_parallel: Optional[bool] = False,
+        # GenInferencer
+        gen_field_replace_token: Optional[str] = "",
+        generation_kwargs={"max_new_tokens": 128},
         **kwargs
     ) -> None:
         super().__init__(
             model_name,
             tokenizer_name,
+            cache_dir,
             max_model_token_num,
             model_config,
             batch_size,
