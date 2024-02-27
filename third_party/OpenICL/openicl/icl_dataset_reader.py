@@ -101,7 +101,7 @@ class DatasetReader:
             prompt = " ".join([str(entry[ctx]) for ctx in self.input_columns])
         else:
             prompt = self.input_template.generate_item(entry)
-        return prompt
+        return prompt.strip()
 
     def generate_input_field_corpus(
         self, dataset: Union[Dataset, DatasetDict], split: Optional[str] = None
@@ -122,7 +122,7 @@ class DatasetReader:
             corpus.append(self.generate_input_field_prompt(entry))
         return corpus
 
-    def generate_ouput_field_prompt(self, entry: Dict) -> str:
+    def generate_output_field_prompt(self, entry: Dict) -> str:
         """Generate a prompt for the output field based on the provided :obj:`entry` data.
 
         Args:
@@ -136,7 +136,7 @@ class DatasetReader:
             prompt = str(entry[self.output_column])
         else:
             prompt = self.output_template.generate_item(entry)
-        return prompt
+        return prompt.strip()
 
     def generate_output_field_corpus(
         self, dataset: Union[Dataset, DatasetDict], split: Optional[str] = None
@@ -154,7 +154,7 @@ class DatasetReader:
             dataset = dataset[split]
         corpus = []
         for entry in dataset:
-            corpus.append(self.generate_ouput_field_prompt(entry))
+            corpus.append(self.generate_output_field_prompt(entry))
         return corpus
 
     def generate_input_output_field_prompt(self, entry: Dict) -> str:
@@ -171,7 +171,7 @@ class DatasetReader:
             prompt = " ".join([entry[ctx] for ctx in self.input_columns] + [str(entry[self.output_column])])
         else:
             prompt = self.input_output_template.generate_item(entry)
-        return prompt
+        return prompt.strip()
 
     def generate_input_output_field_corpus(
         self, dataset: Union[Dataset, DatasetDict], split: Optional[str] = None
@@ -222,34 +222,35 @@ def load_partial_dataset(dataset: Dataset, size: Optional[Union[int, float]] = N
 
 
 class DatasetEncoder(torch.utils.data.Dataset):
-    def __init__(self, datalist: List, model_name=None, tokenizer=None) -> None:
+    def __init__(self, datalist: List, tokenizer_name=None, tokenizer=None, cache_dir=None) -> None:
         self.datalist = datalist
-        if model_name is None and tokenizer is None:
-            raise ValueError("model_name and tokenizer could not both be None")
+        if tokenizer_name is None and tokenizer is None:
+            raise ValueError("tokenizer_name and tokenizer could not both be None")
         if tokenizer is not None:
             self.tokenizer = tokenizer
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, cache_dir=cache_dir)
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             self.tokenizer.padding_side = "left"
-        self.encode_dataset = []
-        self.init_dataset()
-        self.datalist_length = len(self.encode_dataset)
+
+        self.encode_dataset = self.init_dataset()
 
     def init_dataset(self):
+        encode_dataset = []
         for idx, data in enumerate(self.datalist):
             tokenized_data = self.tokenizer.encode_plus(data, truncation=True, return_tensors="pt", verbose=False)
-            self.encode_dataset.append(
+            encode_dataset.append(
                 {
                     "input_ids": tokenized_data.input_ids[0],
                     "attention_mask": tokenized_data.attention_mask[0],
                     "metadata": {"id": idx, "len": len(tokenized_data.input_ids[0]), "text": data},
                 }
             )
+        return encode_dataset
 
     def __len__(self):
-        return self.datalist_length
+        return len(self.encode_dataset)
 
     def __getitem__(self, idx):
         return self.encode_dataset[idx]
