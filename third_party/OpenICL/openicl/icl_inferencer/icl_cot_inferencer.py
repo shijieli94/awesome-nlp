@@ -1,13 +1,14 @@
 """chain-of-thought inferencer"""
 
-from typing import List, Optional
+import logging
+from typing import Dict, List, Optional
 
 import torch
 from accelerate import Accelerator
 from openicl import PromptTemplate
 from openicl.icl_inferencer.icl_base_inferencer import (
     BaseInferencer,
-    GenInferencerOutputHandler,
+    InferencerOutputHandler,
 )
 from openicl.icl_retriever import *
 from openicl.utils.api_service import *
@@ -15,11 +16,10 @@ from openicl.utils.icl_common_utils import (
     get_dataloader,
     get_generation_prompt_list_from_retriever_indices,
 )
-from openicl.utils.logging import get_logger
 from tqdm import tqdm
 from transformers import PretrainedConfig
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class CoTInferencer(BaseInferencer):
@@ -85,10 +85,9 @@ class CoTInferencer(BaseInferencer):
         prompt_template: Optional[PromptTemplate] = None,
         output_json_filepath: Optional[str] = None,
         output_json_filename: Optional[str] = None,
-    ) -> List:
+    ) -> Dict:
         # 1. Preparation for output logs
-        num = len(retriever.test_ds)
-        output_handler = GenInferencerOutputHandler(num, self.accelerator)
+        output_handler = InferencerOutputHandler(self.accelerator)
         index = 0
         if output_json_filepath is None:
             output_json_filepath = self.output_json_filepath
@@ -118,7 +117,7 @@ class CoTInferencer(BaseInferencer):
             cot_idx = idx + 1
             # 4-1. Wrap prompts with Dataloader
             dataloader = get_dataloader(prompt_list, self.batch_size)
-            output_handler.save_orgin_prompts(prompt_list)
+            output_handler.save_results({"prompt": prompt_list})
 
             for entry in tqdm(dataloader, disable=not self.is_main_process):
                 # 4-2-1. Inference with local model
@@ -150,7 +149,7 @@ class CoTInferencer(BaseInferencer):
                 for prediction, output in zip(generated, complete_output):
                     if "t5" in self.model_name:
                         output = prompt_list[index] + output
-                    output_handler.save_prediction_and_output(prediction, output, index)
+                    output_handler.save_result_with_index(index, {"prediction": prediction, "full_output": output})
                     prompt_list[index] = output
                     index = index + 1
 
@@ -162,12 +161,11 @@ class CoTInferencer(BaseInferencer):
             output_handler.subprocess_write_to_json(output_json_filepath, filename)
             if self.accelerator is not None:
                 self.accelerator.wait_for_everyone()
-            output_handler.merge_to_main_process(output_json_filepath, filename)
-            output_handler.write_to_json(output_json_filepath, filename)
+            output_handler.merge_subprocess_results(output_json_filepath, filename, delete=True)
 
             # 4-4. Check for next string in `self.cot_list`
             if cot_idx < cot_list_len:
                 prompt_list = [(prompt + str(self.cot_list[cot_idx])) for prompt in prompt_list]
             else:
                 break
-        return [sample["prediction"] for sample in output_handler.results_dict.values()]
+        return output_handler.results_dict

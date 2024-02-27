@@ -1,16 +1,16 @@
 """PPL Inferencer"""
 
-from typing import List, Optional
+import logging
+from typing import Dict, Optional
 
 import torch
 from openicl import PromptTemplate
-from openicl.icl_inferencer.icl_base_inferencer import PPLInferencerOutputHandler
+from openicl.icl_inferencer.icl_base_inferencer import InferencerOutputHandler
 from openicl.icl_inferencer.icl_ppl_inferencer import PPLInferencer
 from openicl.icl_retriever import *
-from openicl.utils.logging import get_logger
 from tqdm import trange
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class ChannelInferencer(PPLInferencer):
@@ -28,9 +28,9 @@ class ChannelInferencer(PPLInferencer):
         output_json_filepath: Optional[str] = None,
         output_json_filename: Optional[str] = None,
         normalizing_str: Optional[str] = None,
-    ) -> List:
+    ) -> Dict:
         # 1. Preparation for output logs
-        output_handler = PPLInferencerOutputHandler(self.accelerator)
+        output_handler = InferencerOutputHandler(self.accelerator)
 
         sub_predictions = []
         ppl = []
@@ -53,7 +53,7 @@ class ChannelInferencer(PPLInferencer):
         # 4. Generate in-context examples for testing inputs
         for idx in range(len(ice_idx_list)):
             ice.append(retriever.generate_ice(ice_idx_list[idx], ice_template=ice_template))
-        output_handler.save_ice(ice)
+        output_handler.save_results({"in-context examples": ice})
 
         # 5. Calculating PPL for prompts in each label's class
         for label in labels:
@@ -98,7 +98,9 @@ class ChannelInferencer(PPLInferencer):
                     sub_res = self.__get_ppl(input_texts=sub_prompt_list, mask_length=sub_context_length_list)
                 for res, prompt in zip(sub_res, sub_prompt_list):
                     sub_ppl_list.append(res)
-                    output_handler.save_prompt_and_ppl(label, prompt[len(ice[idx]) :], prompt, res, index)
+                    output_handler.save_result_with_index(
+                        index, {"testing input": prompt[len(ice[idx]) :], "prompt": prompt, "PPL": res}, label=label
+                    )
                     index = index + 1
             ppl.append(sub_ppl_list)
 
@@ -106,13 +108,11 @@ class ChannelInferencer(PPLInferencer):
         ppl = list(zip(*ppl))
         for single_ppl in ppl:
             sub_predictions.append(labels[single_ppl.index(min(single_ppl))])
-        output_handler.save_predictions(sub_predictions)
+        output_handler.save_results({"prediction": sub_predictions})
 
         # 7. Output
         output_handler.subprocess_write_to_json(output_json_filepath, output_json_filename)
         if self.accelerator is not None:
             self.accelerator.wait_for_everyone()
-        output_handler.merge_to_main_process(output_json_filepath, output_json_filename)
-        output_handler.write_to_json(output_json_filepath, output_json_filename)
-
-        return [sample["prediction"] for sample in output_handler.results_dict.values()]
+        output_handler.merge_subprocess_results(output_json_filepath, output_json_filename, delete=True)
+        return output_handler.results_dict

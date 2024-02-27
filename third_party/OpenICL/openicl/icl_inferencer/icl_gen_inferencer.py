@@ -1,13 +1,14 @@
 """Direct Generation Inferencer"""
 
-from typing import List, Optional
+import logging
+from typing import Dict, Optional
 
 import torch
 from accelerate import Accelerator
 from openicl import PromptTemplate
 from openicl.icl_inferencer.icl_base_inferencer import (
     BaseInferencer,
-    GenInferencerOutputHandler,
+    InferencerOutputHandler,
 )
 from openicl.icl_retriever import *
 from openicl.utils.api_service import *
@@ -15,11 +16,10 @@ from openicl.utils.icl_common_utils import (
     get_dataloader,
     get_generation_prompt_list_from_retriever_indices,
 )
-from openicl.utils.logging import get_logger
 from tqdm import tqdm
 from transformers import PretrainedConfig
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class GenInferencer(BaseInferencer):
@@ -83,10 +83,9 @@ class GenInferencer(BaseInferencer):
         output_json_filepath: Optional[str] = None,
         output_json_filename: Optional[str] = None,
         force_words=None,
-    ) -> List:
+    ) -> Dict:
         # 1. Preparation for output logs
-        num = len(retriever.test_ds)
-        output_handler = GenInferencerOutputHandler(num, self.accelerator)
+        output_handler = InferencerOutputHandler(self.accelerator)
         index = 0
 
         if output_json_filepath is None:
@@ -107,7 +106,7 @@ class GenInferencer(BaseInferencer):
             ice_template=ice_template,
             prompt_template=prompt_template,
         )
-        output_handler.save_orgin_prompts(prompt_list)
+        output_handler.save_results({"prompt": prompt_list})
 
         # 4. Wrap prompts with Dataloader
         dataloader = get_dataloader(prompt_list, self.batch_size)
@@ -156,13 +155,12 @@ class GenInferencer(BaseInferencer):
 
             # 5-3. Save current output
             for prediction, output in zip(generated, complete_output):
-                output_handler.save_prediction_and_output(prediction, output, index)
+                output_handler.save_result_with_index(index, {"prediction": prediction, "full_output": output})
                 index = index + 1
 
         # 6. Output
         output_handler.subprocess_write_to_json(output_json_filepath, output_json_filename)
         if self.accelerator is not None:
             self.accelerator.wait_for_everyone()
-        output_handler.merge_to_main_process(output_json_filepath, output_json_filename)
-        output_handler.write_to_json(output_json_filepath, output_json_filename)
-        return [sample["prediction"] for sample in output_handler.results_dict.values()]
+        output_handler.merge_subprocess_results(output_json_filepath, output_json_filename, delete=True)
+        return output_handler.results_dict

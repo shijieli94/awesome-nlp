@@ -1,6 +1,4 @@
-"""Basic Inferencer"""
-
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import torch
 from accelerate import Accelerator, infer_auto_device_map, init_empty_weights
@@ -93,7 +91,7 @@ class BaseInferencer:
         prompt_template: Optional[PromptTemplate] = None,
         output_json_filepath: Optional[str] = None,
         output_json_filename: Optional[str] = None,
-    ) -> List:
+    ) -> Dict:
         """Perform In-Context Inference given a retriever and optional templates.
 
         Args:
@@ -168,7 +166,7 @@ class BaseInferencer:
         self.tokenizer.padding_side = "left"
 
     def __init_api(self, **kwargs):
-        if self.api_name == None:
+        if self.api_name is None:
             return
         self.call_api = is_api_available(self.api_name)
         if not self.call_api:
@@ -180,90 +178,22 @@ class BaseInferencer:
         return len(self.tokenizer(inputs, verbose=False)["input_ids"])
 
 
-class GenInferencerOutputHandler:
-    origin_prompt_dict = {}
-    output_dict = {}
-    prediction_dict = {}
-    results_dict = {}
-
-    def __init__(self, num: int, accelerator: Optional[Accelerator] = None) -> None:
-        self.num = num
-        self.accelerator = accelerator
-        self.origin_prompt_dict = {}
-        self.output_dict = {}
-        self.prediction_dict = {}
-        self.results_dict = {}
-
-    def subprocess_write_to_json(self, output_json_filepath: str, output_json_filename: str):
-        self.results_dict = {
-            str(idx): {
-                "origin_prompt": self.origin_prompt_dict[str(idx)],
-                "output": self.output_dict[str(idx)],
-                "prediction": self.prediction_dict[str(idx)],
-            }
-            for idx in self.origin_prompt_dict.keys()
-        }
-        if self.accelerator is not None:
-            with open(
-                f"{output_json_filepath}/process{self.accelerator.process_index}_{output_json_filename}.json",
-                "w",
-                encoding="utf-8",
-            ) as json_file:
-                json.dump(self.results_dict, json_file, indent=4, ensure_ascii=False)
-                json_file.close()
-
-    def write_to_json(self, output_json_filepath: str, output_json_filename: str):
-        with open(f"{output_json_filepath}/{output_json_filename}.json", "w", encoding="utf-8") as json_file:
-            json.dump(self.results_dict, json_file, indent=4, ensure_ascii=False)
-            json_file.close()
-
-    def merge_to_main_process(self, output_json_filepath: str, output_json_filename: str):
-        if self.accelerator is not None and self.accelerator.is_main_process:
-            for pid in range(self.accelerator.num_processes):
-                with open(
-                    f"{output_json_filepath}/process{pid}_{output_json_filename}.json", "r", encoding="utf-8"
-                ) as json_file:
-                    subprocess_results_dict = json.load(json_file)
-                    self.results_dict.update(subprocess_results_dict)
-                    json_file.close()
-            self.results_dict = dict(sorted(self.results_dict.items(), key=lambda x: int(x[0])))
-
-    def save_orgin_prompts(self, origin_prompts: List[str]):
-        for idx, origin_prompt in enumerate(origin_prompts):
-            if self.accelerator is not None:
-                idx = idx * self.accelerator.num_processes + self.accelerator.process_index
-            self.origin_prompt_dict[str(idx)] = origin_prompt
-
-    def save_prediction_and_output(self, prediction, output, idx):
-        if self.accelerator is not None:
-            idx = idx * self.accelerator.num_processes + self.accelerator.process_index
-        self.prediction_dict[str(idx)] = prediction
-        self.output_dict[str(idx)] = output
-
-
-class PPLInferencerOutputHandler:
-    results_dict = {}
-
+class InferencerOutputHandler:
     def __init__(self, accelerator: Optional[Accelerator] = None) -> None:
         self.accelerator = accelerator
         self.results_dict = {}
 
+    def write_to_json(self, filename):
+        with open(filename, "w", encoding="utf-8") as json_file:
+            json.dump(self.results_dict, json_file, indent=4, ensure_ascii=False)
+
     def subprocess_write_to_json(self, output_json_filepath: str, output_json_filename: str):
         if self.accelerator is not None:
-            with open(
-                f"{output_json_filepath}/process{self.accelerator.process_index}_{output_json_filename}.json",
-                "w",
-                encoding="utf-8",
-            ) as json_file:
-                json.dump(self.results_dict, json_file, indent=4, ensure_ascii=False)
-                json_file.close()
+            self.write_to_json(
+                f"{output_json_filepath}/process{self.accelerator.process_index}_{output_json_filename}.json"
+            )
 
-    def write_to_json(self, output_json_filepath: str, output_json_filename: str):
-        with open(f"{output_json_filepath}/{output_json_filename}.json", "w", encoding="utf-8") as json_file:
-            json.dump(self.results_dict, json_file, indent=4, ensure_ascii=False)
-            json_file.close()
-
-    def merge_to_main_process(self, output_json_filepath: str, output_json_filename: str):
+    def merge_subprocess_results(self, output_json_filepath: str, output_json_filename: str, delete=False):
         if self.accelerator is not None and self.accelerator.is_main_process:
             for pid in range(self.accelerator.num_processes):
                 with open(
@@ -271,32 +201,45 @@ class PPLInferencerOutputHandler:
                 ) as json_file:
                     subprocess_results_dict = json.load(json_file)
                     self.results_dict.update(subprocess_results_dict)
-                    json_file.close()
+
             self.results_dict = dict(sorted(self.results_dict.items(), key=lambda x: int(x[0])))
+            self.write_to_json(f"{output_json_filepath}/{output_json_filename}.json")
 
-    def save_ice(self, ice):
-        for idx, example in enumerate(ice):
+            if delete:
+                for pid in range(self.accelerator.num_processes):
+                    os.remove(f"{output_json_filepath}/process{pid}_{output_json_filename}.json")
+
+    def save_results(self, result_dict, label=None):
+        keys = list(result_dict.keys())
+        len_elements = len(result_dict[keys[0]])
+        assert all(
+            len(result_dict[k]) == len_elements for k in keys[1:]
+        ), "results dict contains elements which have different lengths."
+
+        for idx in range(len_elements):
             if self.accelerator is not None:
                 idx = idx * self.accelerator.num_processes + self.accelerator.process_index
-            if str(idx) not in self.results_dict.keys():
-                self.results_dict[str(idx)] = {}
-            self.results_dict[str(idx)]["in-context examples"] = example
+            if idx not in self.results_dict.keys():
+                self.results_dict[idx] = {}
 
-    def save_predictions(self, predictions):
-        for idx, prediction in enumerate(predictions):
-            if self.accelerator is not None:
-                idx = idx * self.accelerator.num_processes + self.accelerator.process_index
-            if str(idx) not in self.results_dict.keys():
-                self.results_dict[str(idx)] = {}
-            self.results_dict[str(idx)]["prediction"] = prediction
+            for key in result_dict.keys():
+                if label is not None:
+                    if f"label: {label}" not in self.results_dict[idx].keys():
+                        self.results_dict[idx][f"label: {label}"] = {}
+                    self.results_dict[idx][f"label: {label}"][key] = result_dict[key][idx]
+                else:
+                    self.results_dict[idx][key] = result_dict[key][idx]
 
-    def save_prompt_and_ppl(self, label, input, prompt, ppl, idx):
+    def save_result_with_index(self, idx, result_dict, label=None):
         if self.accelerator is not None:
             idx = idx * self.accelerator.num_processes + self.accelerator.process_index
-        if str(idx) not in self.results_dict.keys():
-            self.results_dict[str(idx)] = {}
-        if "label: " + str(label) not in self.results_dict[str(idx)].keys():
-            self.results_dict[str(idx)]["label: " + str(label)] = {}
-        self.results_dict[str(idx)]["label: " + str(label)]["testing input"] = input
-        self.results_dict[str(idx)]["label: " + str(label)]["prompt"] = prompt
-        self.results_dict[str(idx)]["label: " + str(label)]["PPL"] = ppl
+        if idx not in self.results_dict.keys():
+            self.results_dict[idx] = {}
+
+        for key in result_dict.keys():
+            if label is not None:
+                if f"label: {label}" not in self.results_dict[idx].keys():
+                    self.results_dict[idx][f"label: {label}"] = {}
+                self.results_dict[idx][f"label: {label}"][key] = result_dict[key]
+            else:
+                self.results_dict[idx][key] = result_dict[key]
