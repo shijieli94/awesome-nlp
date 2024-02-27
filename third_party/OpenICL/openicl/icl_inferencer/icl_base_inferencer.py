@@ -1,12 +1,11 @@
 """Basic Inferencer"""
 
-import os
 from typing import Any, List, Optional, Union
 
 import torch
 from accelerate import Accelerator, infer_auto_device_map, init_empty_weights
-from openicl import BaseRetriever, PromptTemplate
-from openicl.icl_evaluator import *
+from openicl import PromptTemplate
+from openicl.icl_retriever import BaseRetriever
 from openicl.utils.api_service import *
 from transformers import (
     AutoConfig,

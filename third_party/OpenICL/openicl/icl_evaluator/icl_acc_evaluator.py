@@ -1,5 +1,4 @@
 """Acc Evaluator"""
-from typing import List
 
 import evaluate
 from openicl.icl_evaluator import BaseEvaluator

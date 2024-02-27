@@ -1,12 +1,10 @@
 """Zeroshot Retriever"""
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional
 
 from accelerate import Accelerator
-from datasets import Dataset, DatasetDict
-from openicl import DatasetReader, PromptTemplate
+from openicl import DatasetReader
 from openicl.icl_retriever import BaseRetriever
-from openicl.utils.check_type import _check_str
 
 
 class ZeroRetriever(BaseRetriever):

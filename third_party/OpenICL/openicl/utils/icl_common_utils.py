@@ -1,6 +1,5 @@
-from typing import List, Optional, Union
+from typing import List, Optional
 
-from accelerate import Accelerator
 from openicl import PromptTemplate
 from openicl.icl_retriever import BaseRetriever
 from torch.utils.data import DataLoader

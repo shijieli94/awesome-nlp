@@ -1,6 +1,6 @@
 """BM25 Retriever"""
 
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import numpy as np
 from accelerate import Accelerator
@@ -8,7 +8,6 @@ from nltk.tokenize import word_tokenize
 from openicl import DatasetReader
 from openicl.icl_retriever import BaseRetriever
 from openicl.utils.logging import get_logger
-from rank_bm25 import BM25Okapi
 from tqdm import trange
 
 logger = get_logger(__name__)
@@ -59,6 +58,8 @@ class BM25Retriever(BaseRetriever):
             test_split,
             accelerator,
         )
+        from rank_bm25 import BM25Okapi
+
         self.index_corpus = [
             word_tokenize(data) for data in self.dataset_reader.generate_input_field_corpus(self.index_ds)
         ]

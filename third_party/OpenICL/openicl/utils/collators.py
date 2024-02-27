@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
-import numpy as np
 import torch
 from transformers import BatchEncoding, PreTrainedTokenizerBase
 from transformers.file_utils import PaddingStrategy

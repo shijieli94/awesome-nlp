@@ -1,5 +1,4 @@
 """BLEU evaluator"""
-from typing import Dict, List
 
 import evaluate
 from openicl.icl_evaluator import BaseEvaluator

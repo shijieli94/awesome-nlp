@@ -1,12 +1,10 @@
 """Direct Generation Inferencer"""
 
-import json
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import torch
 from accelerate import Accelerator
 from openicl import PromptTemplate
-from openicl.icl_evaluator import *
 from openicl.icl_inferencer.icl_base_inferencer import (
     BaseInferencer,
     GenInferencerOutputHandler,

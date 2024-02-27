@@ -1,12 +1,10 @@
 """PPL Inferencer"""
 
-import json
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import torch
 from accelerate import Accelerator
 from openicl import PromptTemplate
-from openicl.icl_evaluator import *
 from openicl.icl_inferencer.icl_base_inferencer import (
     BaseInferencer,
     PPLInferencerOutputHandler,
@@ -14,7 +12,7 @@ from openicl.icl_inferencer.icl_base_inferencer import (
 from openicl.icl_retriever import *
 from openicl.utils.api_service import *
 from openicl.utils.logging import get_logger
-from tqdm import tqdm, trange
+from tqdm import trange
 from transformers import PretrainedConfig
 
 logger = get_logger(__name__)

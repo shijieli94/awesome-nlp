@@ -1,5 +1,4 @@
 """Base Evaluator"""
-from typing import List
 
 
 class BaseEvaluator:

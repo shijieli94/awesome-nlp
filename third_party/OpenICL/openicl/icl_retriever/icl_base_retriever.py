@@ -1,11 +1,10 @@
 """Basic Retriever"""
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 from accelerate import Accelerator
-from datasets import Dataset, DatasetDict
+from datasets import Dataset
 from openicl import DatasetReader, PromptTemplate
-from openicl.utils.check_type import _check_str
 
 
 class BaseRetriever:

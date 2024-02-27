@@ -4,7 +4,7 @@ import json
 import os
 import random
 from collections import defaultdict
-from typing import List, Optional, Tuple, Union
+from typing import Optional
 
 import numpy as np
 from accelerate import Accelerator
