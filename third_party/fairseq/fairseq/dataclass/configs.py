@@ -623,6 +623,9 @@ class CheckpointConfig(FairseqDataclass):
         },
     )
     model_parallel_size: int = II("common.model_parallel_size")
+    no_strict_model_load: bool = field(
+        default=False, metadata={"help": "allow missing or unexpected keys when loading from a pretrained model"}
+    )
 
 
 @dataclass
