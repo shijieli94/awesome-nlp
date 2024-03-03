@@ -198,8 +198,6 @@ def do_setup(package_data):
             exclude=[
                 "examples",
                 "examples.*",
-                "scripts",
-                "scripts.*",
                 "tests",
                 "tests.*",
             ]
@@ -218,6 +216,7 @@ def do_setup(package_data):
                 "fairseq-score = fairseq_cli.score:cli_main",
                 "fairseq-train = fairseq_cli.train:cli_main",
                 "fairseq-validate = fairseq_cli.validate:cli_main",
+                "fairseq-scripts = scripts.__main__:cli_main",
             ],
         },
         cmdclass=cmdclass,
