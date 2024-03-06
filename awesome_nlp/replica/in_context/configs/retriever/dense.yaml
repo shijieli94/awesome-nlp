@@ -1,0 +1,44 @@
+_target_: awesome_nlp.replica.in_context.retriever.dense_retriever.DenseRetriever
+
+num_ice: ${retrieve_ice}
+num_candidates: ${num_candidates}
+output_file: ${retrieved_file}    # used to store retrieved index
+overwrite_cache: false
+
+# used for dense retriever
+method: knn
+batch_size: 64
+norm_embed: true
+faiss_index: null
+
+searcher:
+  _target_: awesome_nlp.replica.in_context.utils.searchers.Searcher
+  mode: ${retriever.method}
+  topk: 100
+  scale_factor: 0.05
+  full_random: false
+
+model:
+  _target_: transformers.AutoModel.from_pretrained
+  pretrained_model_name_or_path: ${sentence_transformer}
+  cache_dir: ${cache_dir}
+
+dataset_reader:
+  _target_: awesome_nlp.replica.in_context.dataset_readers.retriever_dsr.RetrieverDatasetReader
+  task_name: ${task_name}
+  model_name: ${sentence_transformer}
+  field: q                      # here no use
+  dataset_split: validation     # some tasks do not have public test set, so we use validation set here
+  dataset_path: null            # here set to null so do not do deduplication
+  ds_size: null
+  cache_dir: ${cache_dir}
+
+index_reader:
+  _target_: awesome_nlp.replica.in_context.dataset_readers.retriever_dsr.RetrieverDatasetReader
+  task_name: ${task_name}
+  model_name: ${sentence_transformer}
+  field: q                      # retriever use question field to compute similarities
+  dataset_split: train          # index_reader use train split
+  dataset_path: ${index_file}   # used to store processed index dataset
+  ds_size: null
+  cache_dir: ${cache_dir}

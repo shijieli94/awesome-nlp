@@ -1,0 +1,28 @@
+_target_: awesome_nlp.replica.in_context.inferencer.hf_inferencer.HuggingfaceInferencer
+_recursive_: false
+
+retriever: ${retriever}
+
+output_file: ${predict_file}
+batch_size: ${batch_size}
+cache_dir: ${cache_dir}
+
+visualize_config:
+  _target_: awesome_nlp.replica.in_context.utils.visualizer.Visualizer
+  sample_ids: null
+  single_file: false
+  output_dir: null
+  exit_after_vis: true
+
+model_config:
+  torch_dtype: float32
+  model:
+    _target_: transformers.AutoModelForCausalLM.from_pretrained
+    pretrained_model_name_or_path: ${model_name}
+    cache_dir: ${cache_dir}
+  # the generation arguments in huggingface `generate()` function
+  generation_kwargs:
+    temperature: 0
+    max_new_tokens: 300
+
+dataset_reader: ${inferencer_dsr}

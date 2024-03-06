@@ -1,0 +1,54 @@
+hydra:
+  job:
+    chdir: false
+
+defaults:
+  - inferencer: hf                    # the inferencer for LM inference
+  - retriever: ???                    # the retriever for LM inference
+
+task_name: ???
+model_name: ???                       # the model name of the LM inferencer
+cache_dir: ???
+index_file: ???                       # files to store index dataset
+retrieved_file: ???                   # files to store the retrieved indexes of index dataset
+predict_file: ???                      # files to store the predictions
+
+batch_size: 16                        # the batch_size of the model when using `hf` model_config; for api models, the batch size is decided based on the number of openai keys.
+seed: 42                              # random seed
+
+retrieve_ice: 50                      # num_ice used for retrieve
+inference_ice: null                   # num_ice used during inference, if null, use all retrieved index
+num_candidates: 1                     # number of candidate ices,
+
+# used for retriever
+sentence_transformer: "bert-base-uncased"   # model and tokenizer used to do retrieve and deduplication
+
+inferencer_dsr:
+  _target_: awesome_nlp.replica.in_context.dataset_readers.inference_dsr.InferenceDatasetReader
+  ntokens: ???                          # maximum number of tokens as prompt
+  num_ice: ${inference_ice}
+  ice_separator: "\n"
+  move_nearest_to_the_end: true         # move nearest samples to the end
+  ds_size: null
+
+  # parameters needed to initialize the inference dataset reader
+  dataset_reader:
+    _target_: awesome_nlp.replica.in_context.dataset_readers.base_dsr.BaseDatasetReader
+    task_name: ${task_name}
+    model_name: ${model_name}           # inferencer use llm model
+    field: gen                          # inferencer reader use gen field for dataset
+    dataset_split: null
+    dataset_path: ${retrieved_file}     # inferencer use the retrieved dataset
+    ds_size: ${inferencer.dataset_reader.ds_size}  # number of instances used for the dataset, 'null' refers to 'all'
+    cache_dir: ${cache_dir}
+
+  # parameters needed to initialize the index reader
+  index_reader:
+    _target_: awesome_nlp.replica.in_context.dataset_readers.retriever_dsr.RetrieverDatasetReader
+    task_name: ${task_name}
+    model_name: ${model_name}           # inferencer use llm model
+    field: p                            # inferencer use prompt field for index dataset
+    dataset_split: null                 # inferencer use stored deduplicated index dataset
+    dataset_path: ${index_file}         # use the stored deduplicated index dataset
+    ds_size: null
+    cache_dir: ${cache_dir}

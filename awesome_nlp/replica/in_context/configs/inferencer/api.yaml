@@ -1,0 +1,25 @@
+_target_: awesome_nlp.replica.in_context.inferencer.api_inferencer.APIInferencer
+_recursive_: false
+
+retriever: ${retriever}
+
+output_file: ${predict_file}
+batch_size: ${batch_size}
+cache_dir: ${cache_dir}
+
+model_config:
+  keys_file: ???  # each line is a valid openai key for parallel API calls
+  model:
+    _target_: awesome_nlp.replica.in_context.inferencer.api_inferencer.OPENAIClient
+    # API inferencer arguments
+    keys_file: ${inferencer.model_config.keys_file}
+
+  # the generation arguments for OpenAI, refer to https://platform.openai.com/docs/api-reference/completions for details
+  generation_kwargs:
+    engine: ${model_name}
+    stop: ['\n']
+    temperature: 0
+    max_tokens: 300
+    n: 1
+
+dataset_reader: ${inferencer_dsr}
