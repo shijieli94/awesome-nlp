@@ -440,6 +440,18 @@ class MultiheadAttention(FairseqIncrementalDecoder):
                 assert value is not None
                 assert src_len, key_bsz == value.shape[:2]
 
+        if attn_mask is not None:
+            if attn_mask.ndim == 2:
+                attn_mask = attn_mask.unsqueeze(0).expand(bsz * self.num_heads, -1, -1)
+            if attn_mask.size(0) == bsz:
+                # expand the head dimension
+                assert attn_mask.ndim == 3
+                attn_mask = (
+                    attn_mask.unsqueeze(1)
+                    .repeat(1, self.num_heads, 1, 1)
+                    .view(-1, attn_mask.size(1), attn_mask.size(2))
+                )
+
         if (
             not self.onnx_trace
             and not is_tpu  # don't use PyTorch version on TPUs
@@ -497,8 +509,8 @@ class MultiheadAttention(FairseqIncrementalDecoder):
 
         if self.self_attention:
             q = self.q_proj(query)
-            k = self.k_proj(query)
-            v = self.v_proj(query)
+            k = self.k_proj(query if key is None else key)
+            v = self.v_proj(query if value is None else value)
         elif self.encoder_decoder_attention:
             # encoder-decoder attention
             q = self.q_proj(query)
@@ -607,9 +619,6 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
 
         if attn_mask is not None:
-            attn_mask = attn_mask.unsqueeze(0)
-            if self.onnx_trace:
-                attn_mask = attn_mask.repeat(attn_weights.size(0), 1, 1)
             attn_weights += attn_mask
 
         if key_padding_mask is not None:
