@@ -73,10 +73,13 @@ class AverageMeter(Meter):
         self.val = None  # most recent update
         self.sum = 0  # sum from all updates
         self.count = 0  # total n from all updates
+        # also store n so that we can recover the sum of last updates
+        self.n = 0  # most recent update
 
     def update(self, val, n=1):
         if val is not None:
             self.val = val
+            self.n = n
             if n > 0:
                 self.sum = type_as(self.sum, val) + (val * n)
                 self.count = type_as(self.count, n) + n
@@ -87,6 +90,7 @@ class AverageMeter(Meter):
             "sum": self.sum,
             "count": self.count,
             "round": self.round,
+            "n": self.n,
         }
 
     def load_state_dict(self, state_dict):
@@ -94,6 +98,7 @@ class AverageMeter(Meter):
         self.sum = state_dict["sum"]
         self.count = state_dict["count"]
         self.round = state_dict.get("round", None)
+        self.n = state_dict.get("n", 0)
 
     @property
     def avg(self):
