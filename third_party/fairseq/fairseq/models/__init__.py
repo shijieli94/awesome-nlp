@@ -55,7 +55,8 @@ __all__ = [
 
 def build_model(cfg: FairseqDataclass, task, from_checkpoint=False):
     model = None
-    model_type = getattr(cfg, "_name", None) or getattr(cfg, "arch", None)
+    # first get `arch` so that we can change arch during inference by changing its name
+    model_type = getattr(cfg, "arch", None) or getattr(cfg, "_name", None)
 
     if not model_type and len(cfg) == 1:
         # this is hit if config object is nested in directory that is named after model type
@@ -95,7 +96,8 @@ def build_model(cfg: FairseqDataclass, task, from_checkpoint=False):
 
     assert model is not None, (
         f"Could not infer model type from {cfg}. "
-        "Available models: {}".format(MODEL_DATACLASS_REGISTRY.keys()) + f" Requested model type: {model_type}"
+        + f"Available models: {MODEL_DATACLASS_REGISTRY.keys()}"
+        + f" Requested model type: {model_type}"
     )
 
     return model.build_model(cfg, task)
