@@ -69,7 +69,7 @@ def save_checkpoint(cfg: CheckpointConfig, trainer, epoch_itr, val_loss):
     suffix = trainer.checkpoint_suffix
     checkpoint_conds = collections.OrderedDict()
     checkpoint_conds["checkpoint{}{}.pt".format(epoch, suffix)] = (
-        end_of_epoch and not cfg.no_epoch_checkpoints and epoch % cfg.save_interval == 0
+        end_of_epoch and not cfg.no_epoch_checkpoints and cfg.save_interval > 0 and epoch % cfg.save_interval == 0
     )
     checkpoint_conds["checkpoint_{}_{}{}.pt".format(epoch, updates, suffix)] = (
         # interval-based save can happen at end_of_epoch, so we remove this constraints
