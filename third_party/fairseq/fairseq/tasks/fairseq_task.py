@@ -7,6 +7,7 @@ import logging
 import os
 import warnings
 from argparse import Namespace
+from functools import partial
 from typing import Any, Callable, Dict, List
 
 import numpy as np
@@ -187,9 +188,9 @@ class FairseqTask(object):
                     ).format(ignored[0], dataset.size(ignored[0]), max_positions)
                 )
             logger.warning(
-                (
-                    "{:,} samples have invalid sizes and will be skipped, " "max_positions={}, first few sample ids={}"
-                ).format(len(ignored), max_positions, ignored[:10])
+                "{:,} samples have invalid sizes and will be skipped, max_positions={}, first few sample ids={}".format(
+                    len(ignored), max_positions, ignored[:10]
+                )
             )
         return indices
 
@@ -546,7 +547,7 @@ class FairseqTask(object):
     def aggregate_logging_outputs(self, logging_outputs, criterion):
         """[deprecated] Aggregate logging outputs from data parallel training."""
         utils.deprecation_warning(
-            "The aggregate_logging_outputs API is deprecated. " "Please use the reduce_metrics API instead."
+            "The aggregate_logging_outputs API is deprecated. Please use the reduce_metrics API instead."
         )
         with metrics.aggregate() as agg:
             self.reduce_metrics(logging_outputs, criterion)
@@ -567,6 +568,15 @@ class FairseqTask(object):
                 metrics.log_scalar(k, v)
             return
 
+        def _endswith(p):
+            for filtered in filter(lambda k: k.endswith(p), logging_outputs[0].keys()):
+                yield filtered
+
+        def _log_accuracy(meters, total, n_correct):
+            if meters[total].sum > 0:
+                return round(meters[n_correct].sum * 100.0 / meters[total].sum, 3)
+            return float("nan")
+
         if not any("ntokens" in log for log in logging_outputs):
             warnings.warn("ntokens not found in Criterion logging outputs, cannot log wpb or wps")
         else:
@@ -574,11 +584,47 @@ class FairseqTask(object):
             metrics.log_scalar("wpb", ntokens, priority=180, round=1)
             metrics.log_speed("wps", ntokens, priority=90, round=1)
 
+            for key in _endswith("@ntokens"):
+                val = utils.item(sum(log.get(key, 0) for log in logging_outputs))
+                metrics.log_scalar(key[: -len("@ntokens")], val / ntokens, ntokens, round=3, priority=15)
+
         if not any("nsentences" in log for log in logging_outputs):
             warnings.warn("nsentences not found in Criterion logging outputs, cannot log bsz")
         else:
             nsentences = sum(log.get("nsentences", 0) for log in logging_outputs)
             metrics.log_scalar("bsz", nsentences, priority=190, round=1)
+
+            for key in _endswith("@nsentences"):
+                val = utils.item(sum(log.get(key, 0) for log in logging_outputs))
+                metrics.log_scalar(key[: -len("@nsentences")], val / nsentences, nsentences, round=3, priority=15)
+
+        if not any("sample_size" in log for log in logging_outputs):
+            warnings.warn("sample_size not found in Criterion logging outputs")
+        else:
+            sample_size = sum(log.get("sample_size", 0) for log in logging_outputs)
+
+            for key in _endswith("@nsamples"):
+                val = utils.item(sum(log.get(key, 0) for log in logging_outputs))
+                metrics.log_scalar(key[: -len("@nsamples")], val / sample_size, sample_size, round=3, priority=15)
+
+        for key in _endswith("@sum"):
+            val = utils.item(sum(log.get(key, 0) for log in logging_outputs))
+            metrics.log_scalar_sum(key[: -len("@sum")], val, round=3, priority=15)
+
+        for key in _endswith("@total"):
+            total = utils.item(sum(log.get(key, 0) for log in logging_outputs))
+            n_correct = utils.item(sum(log.get(key.replace("total", "n_correct"), 0) for log in logging_outputs))
+            # because it may be used for display, so we replace `@` with `-` for better readability
+            key_total = key.replace("@total", "-total")
+            key_correct = key.replace("@total", "-n_correct")
+            key_accuracy = key.replace("@total", "-accuracy")
+            # if total is excluded from display, it will start with`_`. However, we always display accuracy
+            if key.startswith("_"):
+                key_accuracy = key_accuracy[1:]
+
+            metrics.log_scalar(key_total, total, priority=15)
+            metrics.log_scalar(key_correct, n_correct, priority=15)
+            metrics.log_derived(key_accuracy, partial(_log_accuracy, total=key_total, n_correct=key_correct))
 
         criterion.__class__.reduce_metrics(logging_outputs)
 
