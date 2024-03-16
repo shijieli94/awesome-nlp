@@ -289,14 +289,19 @@ def main(args):
     task = tasks.get_task(args.task)
 
     if args.joined_dictionary:
-        assert not args.srcdict or not args.tgtdict, "cannot use both --srcdict and --tgtdict with --joined-dictionary"
-
-        if args.srcdict:
+        # if both srcdict and tgtdict are provided, check if they are the same
+        # assert not args.srcdict or not args.tgtdict, "cannot use both --srcdict and --tgtdict with --joined-dictionary"
+        if args.srcdict and args.tgtdict:
+            src_dict = task.load_dictionary(args.srcdict)
+            assert src_dict == task.load_dictionary(
+                args.tgtdict
+            ), "--srcdict differs from --tgtdict while `--joined-dictionary=True`."
+        elif args.srcdict:
             src_dict = task.load_dictionary(args.srcdict)
         elif args.tgtdict:
             src_dict = task.load_dictionary(args.tgtdict)
         else:
-            assert args.trainpref, "--trainpref must be set if --srcdict is not specified"
+            assert args.trainpref, "--trainpref must be set if both `--srcdict` and `--tgtdict` are not specified"
             src_dict = _build_dictionary(
                 {_train_path(lang, args.trainpref) for lang in [args.source_lang, args.target_lang]},
                 task=task,
