@@ -44,7 +44,9 @@ def progress_bar(
         log_format = default_log_format
     if log_file is not None:
         handler = logging.FileHandler(filename=log_file)
-        logger.addHandler(handler)
+        # avoid adding duplicate file handler
+        if not any(h.baseFilename == handler.baseFilename for h in logger.handlers):
+            logger.addHandler(handler)
 
     if log_format == "tqdm" and not sys.stderr.isatty():
         log_format = "simple"
@@ -480,7 +482,8 @@ class WandBProgressBarWrapper(BaseProgressBar):
 
         # reinit=False to ensure if wandb.init() is called multiple times
         # within one process it still references the same run
-        wandb.init(project=wandb_project, reinit=False, name=run_name)
+        if wandb.run is None:
+            wandb.init(project=wandb_project, reinit=False, name=run_name, id=os.environ.get("WANDB_ID", None))
 
     def __iter__(self):
         return iter(self.wrapped_bar)
