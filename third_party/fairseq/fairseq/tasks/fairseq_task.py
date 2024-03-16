@@ -9,6 +9,7 @@ import warnings
 from argparse import Namespace
 from typing import Any, Callable, Dict, List
 
+import numpy as np
 import torch
 from fairseq import search, tokenizer, utils
 from fairseq.data import data_utils, encoders, iterators
@@ -280,7 +281,7 @@ class FairseqTask(object):
 
             # get indices ordered by example size
             with data_utils.numpy_seed(seed + epoch):
-                indices = dataset.ordered_indices()
+                indices = dataset.ordered_indices().astype(np.int64)
 
             # filter examples that are too large
             if max_positions is not None:
