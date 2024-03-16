@@ -32,6 +32,7 @@ class Dictionary:
         self.symbols = []
         self.count = []
         self.indices = {}
+        self.extra_indices = []
         if add_special_symbols:
             self.bos_index = self.add_symbol(bos)
             self.pad_index = self.add_symbol(pad)
@@ -75,6 +76,7 @@ class Dictionary:
         extra_symbols_to_ignore=None,
         unk_string=None,
         include_eos=False,
+        include_bos=False,
         separator=" ",
     ):
         """Helper for converting a tensor of token indices to a string.
@@ -106,7 +108,7 @@ class Dictionary:
             else:
                 return self[i]
 
-        if hasattr(self, "bos_index"):
+        if hasattr(self, "bos_index") and not include_bos:
             extra_symbols_to_ignore.add(self.bos())
 
         sent = separator.join(token_string(i) for i in tensor if utils.item(i) not in extra_symbols_to_ignore)
@@ -132,6 +134,10 @@ class Dictionary:
             self.symbols.append(word)
             self.count.append(n)
             return idx
+
+    def append_extra_tokens(self, n):
+        for i in range(max(0, n)):
+            self.extra_indices.append(self.add_symbol("<extra_{:04d}>".format(i)))
 
     def update(self, new_dict):
         """Updates counts from new dictionary."""
@@ -205,6 +211,16 @@ class Dictionary:
     def unk(self):
         """Helper to get index of unk symbol"""
         return self.unk_index
+
+    def extra(self, idx=None):
+        if idx is None:
+            return self.extra_indices
+        if idx < len(self.extra_indices):
+            return self.extra_indices[idx]
+        raise IndexError("Index {} is out of range. Total extra tokens: {}".format(idx, len(self.extra_indices)))
+
+    def is_extra_token(self, idx):
+        return utils.item(idx) in self.extra_indices
 
     @classmethod
     def load(cls, f, add_special_symbols=True):
