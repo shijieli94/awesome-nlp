@@ -46,8 +46,7 @@ def average_checkpoints(inputs):
             params_keys = model_params_keys
         elif params_keys != model_params_keys:
             raise KeyError(
-                "For checkpoint {}, expected list of params: {}, "
-                "but found: {}".format(f, params_keys, model_params_keys)
+                f"For checkpoint {f}, expected list of params: {params_keys}, but found: {model_params_keys}"
             )
 
         for k in params_keys:
@@ -88,7 +87,26 @@ def last_n_checkpoints(paths, n, update_based, upper_bound=None):
             if upper_bound is None or sort_key <= upper_bound:
                 entries.append((sort_key, m.group(0)))
     if len(entries) < n:
-        raise Exception("Found {} checkpoint files but need at least {}", len(entries), n)
+        raise Exception(f"Found {len(entries)} checkpoint files but need at least {n}")
+    return [os.path.join(path, x[1]) for x in sorted(entries, reverse=True)[:n]]
+
+
+def last_n_best_checkpoints(paths, n, metric):
+    assert len(paths) == 1
+    path = paths[0]
+
+    pt_regexp = re.compile(rf"checkpoint.best_{metric}_([\d.]+)\.pt")
+    files = PathManager.ls(path)
+
+    entries = []
+    for f in files:
+        m = pt_regexp.fullmatch(f)
+        if m is not None:
+            sort_key = float(m.group(1))
+            entries.append((sort_key, m.group(0)))
+
+    if len(entries) < n:
+        raise Exception(f"Found {len(entries)} checkpoint files but need at least {n}")
     return [os.path.join(path, x[1]) for x in sorted(entries, reverse=True)[:n]]
 
 
@@ -108,7 +126,7 @@ def main():
     num_group.add_argument('--num-update-checkpoints', type=int,
                            help='if set, will try to find checkpoints with names checkpoint_ee_xx.pt in the path specified by'
                            ' input, and average last this many of them.')
-    num_group.add_argument('--num-best-checkpoints', type=int, default=0,
+    num_group.add_argument('--num-best-checkpoints', type=int,
                            help='if set, will try to find checkpoints with names checkpoint_best_ee_xx.pt in the path specified by'
                            ' input, and average last this many of them.')
     parser.add_argument('--checkpoint-upper-bound', type=int,
@@ -119,9 +137,21 @@ def main():
                         'e.g., with --num-update-checkpoints=10 --checkpoint-upper-bound=50000, checkpoints 40500-50000 would'
                         ' be averaged assuming --save-interval-updates 500'
                         )
+    parser.add_argument('--best-checkpoint-metric', type=str, default='loss',
+                        help='metric to use to find best checkpoints')
     # fmt: on
     args = parser.parse_args()
     print(args)
+
+    assert args.checkpoint_upper_bound is None or (
+        args.num_epoch_checkpoints is not None or args.num_update_checkpoints is not None
+    ), "--checkpoint-upper-bound requires --num-epoch-checkpoints or --num-update-checkpoints"
+    assert (
+        int(args.num_epoch_checkpoints is not None)
+        + int(args.num_update_checkpoints is not None)
+        + int(args.num_best_checkpoints is not None)
+        == 1
+    ), "Exactly one of --num-epoch-checkpoints, --num-update-checkpoints, or --num-best-checkpoints must be set"
 
     num = None
     is_update_based = False
@@ -130,33 +160,15 @@ def main():
         is_update_based = True
     elif args.num_epoch_checkpoints is not None:
         num = args.num_epoch_checkpoints
+    else:
+        num = args.num_best_checkpoints
 
-    assert args.checkpoint_upper_bound is None or (
-        args.num_epoch_checkpoints is not None or args.num_update_checkpoints is not None
-    ), "--checkpoint-upper-bound requires --num-epoch-checkpoints or --num-update-checkpoints"
-    assert (
-        args.num_epoch_checkpoints is None or args.num_update_checkpoints is None
-    ), "Cannot combine --num-epoch-checkpoints and --num-update-checkpoints"
+    if args.num_best_checkpoints is not None:
+        args.inputs = last_n_best_checkpoints(args.inputs, args.num_best_checkpoints, args.best_checkpoint_metric)
+    else:
+        args.inputs = last_n_checkpoints(args.inputs, num, is_update_based, upper_bound=args.checkpoint_upper_bound)
 
-    if num is not None:
-        args.inputs = last_n_checkpoints(
-            args.inputs,
-            num,
-            is_update_based,
-            upper_bound=args.checkpoint_upper_bound,
-        )
-        print("averaging checkpoints: ", args.inputs)
-
-    if args.num_best_checkpoints > 0:
-        args.inputs = list(
-            sorted(
-                args.inputs,
-                key=lambda x: float(os.path.basename(x).split("_")[-1].replace(".pt", "")),
-            )
-        )
-        args.inputs = args.inputs[: args.num_best_checkpoints]
-        for path in args.inputs:
-            print(os.path.basename(path))
+    print("averaging checkpoints: ", args.inputs)
     new_state = average_checkpoints(args.inputs)
     with PathManager.open(args.output, "wb") as f:
         torch.save(new_state, f)
