@@ -42,3 +42,6 @@ class FairseqDropout(nn.Module):
                 self.apply_during_inference = True
             else:
                 logger.info("Disabling dropout for module: {}".format(name))
+
+    def extra_repr(self) -> str:
+        return f"p={self.p}"

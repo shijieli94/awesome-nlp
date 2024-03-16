@@ -42,3 +42,6 @@ class LayerDropModuleList(nn.ModuleList):
         for i, m in enumerate(super().__iter__()):
             if not self.training or (dropout_probs[i] > self.p):
                 yield m
+
+    def extra_repr(self) -> str:
+        return f"p={self.p}"
