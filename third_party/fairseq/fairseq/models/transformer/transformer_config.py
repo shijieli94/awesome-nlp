@@ -41,19 +41,28 @@ class EncDecBaseConfig(FairseqDataclass):
 
 
 @dataclass
+class EncoderConfig(EncDecBaseConfig):
+    max_positions: int = field(
+        default=DEFAULT_MAX_SOURCE_POSITIONS,
+        metadata={"help": "Maximum input length supported by the encoder"},
+    )
+
+
+@dataclass
 class DecoderConfig(EncDecBaseConfig):
-    input_dim: int = II("model.decoder.embed_dim")
+    max_positions: int = field(
+        default=DEFAULT_MAX_TARGET_POSITIONS,
+        metadata={"help": "Maximum output length supported by the decoder"},
+    )
+    # need add help otherwise this config will be ignored
+    input_dim: int = field(
+        default=II("model.decoder.embed_dim"),
+        metadata={"help": "decoder input dimension (extra linear layer if different from decoder embed dim)"},
+    )
     output_dim: int = field(
         default=II("model.decoder.embed_dim"),
         metadata={"help": "decoder output dimension (extra linear layer if different from decoder embed dim)"},
     )
-
-    def __post_init__(self):
-        #  II doesn't work if we are just creating the object outside of hydra so fix that
-        if self.input_dim == II("model.decoder.embed_dim"):
-            self.input_dim = self.embed_dim
-        if self.output_dim == II("model.decoder.embed_dim"):
-            self.output_dim = self.embed_dim
 
 
 @dataclass
@@ -87,19 +96,27 @@ class TransformerConfig(FairseqDataclass):
             "alias": "--relu-dropout",
         },
     )
-    adaptive_input: bool = False
-    encoder: EncDecBaseConfig = EncDecBaseConfig()
-    # TODO should really be in the encoder config
-    max_source_positions: int = field(
-        default=DEFAULT_MAX_SOURCE_POSITIONS,
-        metadata={"help": "Maximum input length supported by the encoder"},
+    relu_dropout: float = 0.0  # for backwards compatibility with models that use cfg.relu_dropout
+    adaptive_input: bool = field(default=False, metadata={"help": "if set, uses adaptive input"})
+    adaptive_input_factor: float = field(default=4, metadata={"help": "adaptive input factor"})
+    adaptive_input_cutoff: Optional[str] = field(
+        default=None,
+        metadata={"help": "comma separated list of adaptive input cutoff points."},
     )
+    adaptive_softmax_cutoff: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "comma separated list of adaptive softmax cutoff points. "
+            "Must be used with adaptive_loss criterion"
+        },
+    )
+    adaptive_softmax_dropout: float = field(
+        default=0,
+        metadata={"help": "sets adaptive softmax dropout for the tail projections"},
+    )
+    adaptive_softmax_factor: float = field(default=4, metadata={"help": "adaptive input factor"})
+    encoder: EncoderConfig = EncoderConfig()
     decoder: DecoderConfig = DecoderConfig()
-    # TODO should really be in the decoder config
-    max_target_positions: int = field(
-        default=DEFAULT_MAX_TARGET_POSITIONS,
-        metadata={"help": "Maximum output length supported by the decoder"},
-    )
     share_decoder_input_output_embed: bool = field(
         default=False, metadata={"help": "share decoder input and output embeddings"}
     )
@@ -119,15 +136,6 @@ class TransformerConfig(FairseqDataclass):
         default=False,
         metadata={"help": "if True, disables positional embeddings (outside self attention)"},
     )
-    adaptive_softmax_cutoff: Optional[List[int]] = field(
-        default=None,
-        metadata={"help": "list of adaptive softmax cutoff points. Must be used with adaptive_loss criterion"},
-    )
-    adaptive_softmax_dropout: float = field(
-        default=0.0,
-        metadata={"help": "sets adaptive softmax dropout for the tail projections"},
-    )
-    adaptive_softmax_factor: float = field(default=4, metadata={"help": "adaptive input factor"})
     layernorm_embedding: bool = field(default=False, metadata={"help": "add layernorm to embedding"})
     tie_adaptive_weights: bool = field(
         default=False,
@@ -166,12 +174,11 @@ class TransformerConfig(FairseqDataclass):
     )
     # DEPRECATED field, but some old checkpoints might have it
     char_inputs: bool = field(default=False, metadata={"help": "if set, model takes character ids as input"})
-    relu_dropout: float = 0.0
     # config for "BASE Layers: Simplifying Training of Large, Sparse Models"
     base_layers: Optional[int] = field(default=0, metadata={"help": "number of BASE layers in total"})
     base_sublayers: Optional[int] = field(default=1, metadata={"help": "number of sublayers in each BASE layer"})
-    base_shuffle: Optional[int] = field(
-        default=1,
+    base_shuffle: bool = field(
+        default=False,
         metadata={"help": "shuffle tokens between workers before computing assignment"},
     )
 
@@ -185,6 +192,10 @@ class TransformerConfig(FairseqDataclass):
         default=False,
         metadata={"help": "don't add an extra layernorm after the last decoder block"},
     )
+
+    def __post_init__(self):
+        if self.offload_activations:
+            self.checkpoint_activations = True
 
     # We need to make this hierarchical dataclass like the flat namespace
     # __getattr__ and __setattr__ here allow backward compatibility

@@ -68,7 +68,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         self.output_embed_dim = cfg.decoder.output_dim
 
         self.padding_idx = embed_tokens.padding_idx
-        self.max_target_positions = cfg.max_target_positions
+        self.max_target_positions = getattr(cfg, "max_target_positions", None) or cfg.decoder.max_positions
 
         self.embed_tokens = embed_tokens
 

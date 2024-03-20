@@ -7,7 +7,7 @@ defaults:
     - fairseq_config
     - task: null
     - model: null
-    - criterion: cross_entropy
+    - criterion: label_smoothed_cross_entropy
     - optimizer: null
     - lr_scheduler: fixed
     - bpe: null

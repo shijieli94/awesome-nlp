@@ -52,7 +52,7 @@ class TransformerEncoderBase(FairseqEncoder):
 
         embed_dim = embed_tokens.embedding_dim
         self.padding_idx = embed_tokens.padding_idx
-        self.max_source_positions = cfg.max_source_positions
+        self.max_source_positions = getattr(cfg, "max_source_positions", None) or cfg.encoder.max_positions
 
         self.embed_tokens = embed_tokens
 
@@ -60,7 +60,7 @@ class TransformerEncoderBase(FairseqEncoder):
 
         self.embed_positions = (
             PositionalEmbedding(
-                cfg.max_source_positions,
+                self.max_source_positions,
                 embed_dim,
                 self.padding_idx,
                 learned=cfg.encoder.learned_pos,

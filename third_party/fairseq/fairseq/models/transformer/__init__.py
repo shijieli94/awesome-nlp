@@ -12,7 +12,9 @@ from .transformer_config import (
 )
 from .transformer_decoder import TransformerDecoder, TransformerDecoderBase, Linear
 from .transformer_encoder import TransformerEncoder, TransformerEncoderBase
-from .transformer_legacy import (
+from .transformer_base import (
+    TransformerModelBase,
+    Embedding,
     TransformerModel,
     base_architecture,
     tiny_architecture,
@@ -23,7 +25,6 @@ from .transformer_legacy import (
     transformer_wmt_en_de_big,
     transformer_wmt_en_de_big_t2t,
 )
-from .transformer_base import TransformerModelBase, Embedding
 
 
 __all__ = [

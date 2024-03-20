@@ -20,7 +20,7 @@ from omegaconf import DictConfig
     register_criterion,
     CRITERION_REGISTRY,
     CRITERION_DATACLASS_REGISTRY,
-) = registry.setup_registry("--criterion", base_class=FairseqCriterion, default="cross_entropy")
+) = registry.setup_registry("--criterion", base_class=FairseqCriterion, default="label_smoothed_cross_entropy")
 
 
 def build_criterion(cfg: DictConfig, task, from_checkpoint=False):
