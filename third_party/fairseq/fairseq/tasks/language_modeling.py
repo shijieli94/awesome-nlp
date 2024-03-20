@@ -56,9 +56,6 @@ class LanguageModelingConfig(FairseqDataclass):
     future_target: bool = field(default=False, metadata={"help": "include future target"})
     past_target: bool = field(default=False, metadata={"help": "include past target"})
     add_bos_token: bool = field(default=False, metadata={"help": "prepend beginning of sentence token (<s>)"})
-    max_target_positions: Optional[int] = field(
-        default=None, metadata={"help": "max number of tokens in the target sequence"}
-    )
     shorten_method: SHORTEN_METHOD_CHOICES = field(
         default="none",
         metadata={"help": "if not none, shorten sequences that exceed --tokens-per-sample"},
@@ -85,7 +82,6 @@ class LanguageModelingConfig(FairseqDataclass):
     batch_size_valid: Optional[int] = II("dataset.batch_size_valid")
     dataset_impl: Optional[ChoiceEnum(get_available_dataset_impl())] = II("dataset.dataset_impl")
     data_buffer_size: int = II("dataset.data_buffer_size")
-    tpu: bool = II("common.tpu")
     use_plasma_view: bool = II("common.use_plasma_view")
     plasma_path: str = II("common.plasma_path")
 
@@ -124,10 +120,7 @@ class LanguageModelingTask(LegacyFairseqTask):
         super().__init__(args)
         self.dictionary = dictionary
         self.output_dictionary = output_dictionary or dictionary
-
-        if targets is None:
-            targets = ["future"]
-        self.targets = targets
+        self.targets = targets or ["future"]
 
     @classmethod
     def setup_dictionary(cls, args, **kwargs):
@@ -141,7 +134,7 @@ class LanguageModelingTask(LegacyFairseqTask):
             output_dictionary = dictionary
             if args.output_dictionary_size >= 0:
                 output_dictionary = TruncatedDictionary(dictionary, args.output_dictionary_size)
-        return (dictionary, output_dictionary)
+        return dictionary, output_dictionary
 
     @classmethod
     def setup_task(cls, args, **kwargs):
@@ -310,8 +303,7 @@ class LanguageModelingTask(LegacyFairseqTask):
         shard_id: int = 0,
         num_workers: int = 1,
         data_buffer_size: int = 10,
-        # ensures that every evaluated token has access to a context of at least
-        # this size, if possible
+        # ensures that every evaluated token has access to a context of at least this size, if possible
         context_window: int = 0,
     ):
         if context_window > 0:
@@ -335,12 +327,10 @@ class LanguageModelingTask(LegacyFairseqTask):
 
     @property
     def source_dictionary(self):
-        """Return the :class:`~fairseq.data.Dictionary` for the language
-        model."""
+        """Return the :class:`~fairseq.data.Dictionary` for the language model."""
         return self.dictionary
 
     @property
     def target_dictionary(self):
-        """Return the :class:`~fairseq.data.Dictionary` for the language
-        model."""
+        """Return the :class:`~fairseq.data.Dictionary` for the language model."""
         return self.output_dictionary
