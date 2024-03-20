@@ -208,12 +208,16 @@ def _override_attr(sub_node: str, data_class: Type[FairseqDataclass], args: Name
             return f.default_factory()
         return f.default
 
+    prefix = ""
+    if "." in sub_node:  # child nodes have a different argument name
+        prefix = "_".join(sub_node.split(".")[1:]) + "_"
+
     for k, v in data_class.__dataclass_fields__.items():
         if k.startswith("_"):
             # private member, skip
             continue
 
-        val = get_default(v) if not hasattr(args, k) else getattr(args, k)
+        val = get_default(v) if not hasattr(args, prefix + k) else getattr(args, prefix + k)
 
         field_type = interpret_dc_type(v.type)
         if (
