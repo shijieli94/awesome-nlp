@@ -1468,9 +1468,10 @@ def _catalog_shared_params(module, memo=None, prefix=""):
         first_call = False
     for name, param in module._parameters.items():
         param_prefix = prefix + ("." if prefix else "") + name
-        if param not in memo:
-            memo[param] = []
-        memo[param].append(param_prefix)
+        if param is not None:
+            if param not in memo:
+                memo[param] = []
+            memo[param].append(param_prefix)
     for name, m in module._modules.items():
         if m is None:
             continue
