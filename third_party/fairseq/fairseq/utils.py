@@ -909,3 +909,38 @@ def hotreload_function(name=None):
         return func_wrapper
 
     return hotreload_decorator
+
+
+def get_anneal_argument_parser(anneal_str, keep_last=False):
+    """
+    Parse anneal argument
+
+    Usage:
+    `v1@n1-v2@n2`: linearly increase value from v1 at update n1 to v2 at update n2
+    """
+    last_pos = -1
+    anneal_params = []
+    for value_str in anneal_str.split("-"):
+        if "@" not in value_str:
+            raise ValueError(f"Invalid anneal argument: {anneal_str}")
+        val, pos = value_str.split("@")
+        val = float(val)
+        pos = int(pos.lower().replace("k", "000"))
+        if not pos > last_pos:
+            raise ValueError(f"positions in anneal argument should in a ascend order")
+        anneal_params.append((val, pos))
+        last_pos = pos
+
+    def get_value(update_num):
+        init_val, init_pos = anneal_params[0]
+
+        if update_num < init_pos:
+            return None
+
+        for next_val, next_pos in anneal_params[1:]:
+            if update_num <= next_pos:
+                return init_val + (next_val - init_val) * (update_num - init_pos) / (next_pos - init_pos)
+            init_val, init_pos = next_val, next_pos
+        return init_val if keep_last else None
+
+    return get_value
