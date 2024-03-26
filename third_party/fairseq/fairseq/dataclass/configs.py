@@ -840,6 +840,7 @@ class GenerationConfig(FairseqDataclass):
         default=None,
         metadata={"help": "EOS token"},
     )
+    generate_suffix: str = field(default="", metadata={"help": "suffix to add to the generate file name"})
 
 
 @dataclass

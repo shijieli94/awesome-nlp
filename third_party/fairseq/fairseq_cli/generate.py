@@ -7,7 +7,7 @@
 Translate pre-processed data with a trained model.
 """
 
-import ast
+import json
 import logging
 import math
 import os
@@ -40,7 +40,7 @@ def main(cfg: DictConfig):
         os.makedirs(cfg.common_eval.results_path, exist_ok=True)
         output_path = os.path.join(
             cfg.common_eval.results_path,
-            "generate-{}.txt".format(cfg.dataset.gen_subset),
+            "generate-{}{}.txt".format(cfg.dataset.gen_subset, cfg.generation.generate_suffix),
         )
         with open(output_path, "w", buffering=1, encoding="utf-8") as h:
             return _main(cfg, h)
@@ -87,7 +87,7 @@ def _main(cfg: DictConfig, output_file):
         src_dict = None
     tgt_dict = task.target_dictionary
 
-    overrides = ast.literal_eval(cfg.common_eval.model_overrides)
+    overrides = json.loads(cfg.common_eval.model_overrides)
 
     # Load ensemble
     logger.info("loading model(s) from {}".format(cfg.common_eval.path))
@@ -230,21 +230,23 @@ def _main(cfg: DictConfig, output_file):
                         extra_symbols_to_ignore=get_symbols_to_strip_from_output(generator),
                     )
 
-            src_str = decode_fn(src_str)
+            detok_src_str = decode_fn(src_str)
             if has_target:
-                target_str = decode_fn(target_str)
+                detok_target_str = decode_fn(target_str)
 
             if not cfg.common_eval.quiet:
                 if src_dict is not None:
                     print("S-{}\t{}".format(sample_id, src_str), file=output_file)
+                    print("DS-{}\t{}".format(sample_id, detok_src_str), file=output_file)
                 if has_target:
                     print("T-{}\t{}".format(sample_id, target_str), file=output_file)
+                    print("DT-{}\t{}".format(sample_id, detok_target_str), file=output_file)
 
             # Process top predictions
             for j, hypo in enumerate(hypos[i][: cfg.generation.nbest]):
                 hypo_tokens, hypo_str, alignment = utils.post_process_prediction(
                     hypo_tokens=hypo["tokens"].int().cpu(),
-                    src_str=src_str,
+                    src_str=detok_src_str,
                     alignment=hypo["alignment"],
                     align_dict=align_dict,
                     tgt_dict=tgt_dict,
@@ -261,7 +263,7 @@ def _main(cfg: DictConfig, output_file):
                     )
                     # detokenized hypothesis
                     print(
-                        "D-{}\t{}\t{}".format(sample_id, score, detok_hypo_str),
+                        "DH-{}\t{}\t{}".format(sample_id, score, detok_hypo_str),
                         file=output_file,
                     )
                     print(
@@ -305,7 +307,7 @@ def _main(cfg: DictConfig, output_file):
                         for step, h in enumerate(hypo["history"]):
                             _, h_str, _ = utils.post_process_prediction(
                                 hypo_tokens=h["tokens"].int().cpu(),
-                                src_str=src_str,
+                                src_str=detok_src_str,
                                 alignment=None,
                                 align_dict=None,
                                 tgt_dict=tgt_dict,
@@ -320,10 +322,10 @@ def _main(cfg: DictConfig, output_file):
                 if has_target and j == 0:
                     if align_dict is not None or cfg.common_eval.post_process is not None:
                         # Convert back to tokens for evaluation with unk replacement and/or without BPE
-                        target_tokens = tgt_dict.encode_line(target_str, add_if_not_exist=True)
+                        target_tokens = tgt_dict.encode_line(detok_target_str, add_if_not_exist=True)
                         hypo_tokens = tgt_dict.encode_line(detok_hypo_str, add_if_not_exist=True)
                     if hasattr(scorer, "add_string"):
-                        scorer.add_string(target_str, detok_hypo_str)
+                        scorer.add_string(detok_target_str, detok_hypo_str)
                     else:
                         scorer.add(target_tokens, hypo_tokens)
 
@@ -332,14 +334,15 @@ def _main(cfg: DictConfig, output_file):
         num_sentences += sample["nsentences"] if "nsentences" in sample else sample["id"].numel()
 
     logger.info("NOTE: hypothesis and token scores are output in base 2")
-    logger.info(
+    print(
         "Translated {:,} sentences ({:,} tokens) in {:.1f}s ({:.2f} sentences/s, {:.2f} tokens/s)".format(
             num_sentences,
             gen_timer.n,
             gen_timer.sum,
             num_sentences / gen_timer.sum,
             1.0 / gen_timer.avg,
-        )
+        ),
+        file=output_file,
     )
     if has_target:
         if cfg.bpe and not cfg.generation.sacrebleu:
@@ -353,7 +356,7 @@ def _main(cfg: DictConfig, output_file):
                 )
         # use print to be consistent with other main outputs: S-, H-, T-, D- and so on
         print(
-            "Generate {} with beam={}: {}".format(cfg.dataset.gen_subset, cfg.generation.beam, scorer.result_string()),
+            "Generate {} with beam={}: {}".format(cfg.dataset.gen_subset, generator.beam_size, scorer.result_string()),
             file=output_file,
         )
 
