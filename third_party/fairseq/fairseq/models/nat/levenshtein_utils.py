@@ -9,25 +9,103 @@ from fairseq.utils import new_arange
 # -------------- Helper Functions --------------------------------------------------- #
 
 
-def load_libnat():
-    try:
-        from fairseq import libnat_cuda
-
-        return libnat_cuda, True
-
-    except ImportError as e:
-        print(str(e) + "... fall back to CPU version")
-
+def load_libnat(use_cuda=True):
+    if use_cuda:
         try:
-            from fairseq import libnat
+            from fairseq import libnat_cuda
 
-            return libnat, False
+            return libnat_cuda, True
 
         except ImportError as e:
-            import sys
+            print(str(e) + "... fall back to CPU version")
 
-            sys.stderr.write("ERROR: missing libnat_cuda. run `python setup.py build_ext --inplace`\n")
-            raise e
+    try:
+        from fairseq import libnat
+
+        return libnat, False
+
+    except ImportError as e:
+        print(str(e) + "... fall back to pure python version")
+
+        return None, False
+
+
+def edit_distance2_with_dp(x, y):
+    lx, ly = len(x), len(y)
+    d = [[0] * (ly + 1) for _ in range(lx + 1)]
+
+    for i in range(lx + 1):
+        for j in range(ly + 1):
+            if j == 0:
+                d[i][0] = i
+                continue
+
+            if i == 0:
+                d[0][j] = j
+                continue
+
+            d[i][j] = min(
+                d[i - 1][j] + 1,  # delete
+                d[i][j - 1] + 1,  # insert
+                d[i - 1][j - 1] + (0 if x[i - 1] == y[j - 1] else 2),  # replace or keep
+            )
+
+    return d
+
+
+def edit_distance2_backtracking(d, x, y, terminal_symbol):
+    seq = []
+    edit_seqs = [[] for _ in range(len(x) + 2)]
+
+    if len(x) == 0:
+        edit_seqs[0] = y[:]
+        return edit_seqs
+
+    i = len(d) - 1
+    j = len(d[0]) - 1
+
+    while i > 0 or j > 0:
+        if i == 0 or j == 0:
+            break
+
+        if j > 0 and d[i][j - 1] < d[i][j]:
+            seq.extend([1, y[j - 1]])  # insert
+            j -= 1
+        elif i > 0 and d[i - 1][j] < d[i][j]:
+            seq.extend([2, x[i - 1]])  # delete
+            i -= 1
+        else:
+            seq.extend([3, x[i - 1]])  # keep
+            i -= 1
+            j -= 1
+
+    prev_op, s = 0, 0
+    for k in range(0, len(seq) // 2):
+        op = seq[-(2 * k + 2)]
+        word = seq[-(2 * k + 1)]
+        if prev_op != 1:
+            s += 1
+        if op == 1:  # insert
+            edit_seqs[s - 1].append(word)
+        elif op == 2:  # delete
+            edit_seqs[len(x) + 1].append(1)
+        else:  # keep
+            edit_seqs[len(x) + 1].append(0)
+        prev_op = op
+
+    for k in range(len(edit_seqs)):
+        if not edit_seqs[k]:
+            edit_seqs[k].append(terminal_symbol)
+
+    return edit_seqs
+
+
+def suggested_ed2_path(xs, ys, terminal_symbol):
+    seq = []
+    for i in range(len(xs)):
+        d = edit_distance2_with_dp(xs[i], ys[i])
+        seq.append(edit_distance2_backtracking(d, xs[i], ys[i], terminal_symbol))
+    return seq
 
 
 def _get_ins_targets(in_tokens, out_tokens, padding_idx, unk_idx):
@@ -58,7 +136,11 @@ def _get_ins_targets(in_tokens, out_tokens, padding_idx, unk_idx):
         in_tokens_list = [[t for t in s if t != padding_idx] for i, s in enumerate(in_tokens.tolist())]
         out_tokens_list = [[t for t in s if t != padding_idx] for i, s in enumerate(out_tokens.tolist())]
 
-        full_labels = libnat.suggested_ed2_path(in_tokens_list, out_tokens_list, padding_idx)
+        if libnat is not None:
+            full_labels = libnat.suggested_ed2_path(in_tokens_list, out_tokens_list, padding_idx)
+        else:
+            full_labels = suggested_ed2_path(in_tokens_list, out_tokens_list, padding_idx)
+
         mask_inputs = [[len(c) if c[0] != padding_idx else 0 for c in a[:-1]] for a in full_labels]
 
         # generate labels
@@ -108,7 +190,11 @@ def _get_del_targets(in_tokens, out_tokens, padding_idx):
             in_tokens_list = [[t for t in s if t != padding_idx] for i, s in enumerate(in_tokens.tolist())]
             out_tokens_list = [[t for t in s if t != padding_idx] for i, s in enumerate(out_tokens.tolist())]
 
-        full_labels = libnat.suggested_ed2_path(in_tokens_list, out_tokens_list, padding_idx)
+        if libnat is not None:
+            full_labels = libnat.suggested_ed2_path(in_tokens_list, out_tokens_list, padding_idx)
+        else:
+            full_labels = suggested_ed2_path(in_tokens_list, out_tokens_list, padding_idx)
+
         word_del_targets = [b[-1] for b in full_labels]
         word_del_targets = [labels + [0 for _ in range(out_seq_len - len(labels))] for labels in word_del_targets]
 
@@ -201,8 +287,9 @@ def _skip(x, mask):
     if isinstance(x, torch.Tensor):
         if x.size(0) == mask.size(0):
             return x[mask]
-        elif x.size(1) == mask.size(0):
-            return x[:, mask]
+        elif x.size(1) == mask.size(0):  # TODO: what happens if x.size(0) == x.size(1) == mask.size(0)
+            # return x[:, mask]
+            raise ValueError
 
     if isinstance(x, list):
         return [_skip(x_i, mask) for x_i in x]

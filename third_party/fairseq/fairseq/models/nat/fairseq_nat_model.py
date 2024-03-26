@@ -7,9 +7,9 @@ import math
 
 import torch
 from fairseq.models.transformer import (
-    TransformerDecoder,
-    TransformerEncoder,
-    TransformerModel,
+    TransformerDecoderBase,
+    TransformerEncoderBase,
+    TransformerModelBase,
 )
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
 
@@ -83,13 +83,13 @@ def ensemble_decoder(func):
     return wrapper
 
 
-class FairseqNATModel(TransformerModel):
+class FairseqNATModel(TransformerModelBase):
     """
     Abstract class for all nonautoregressive-based models
     """
 
-    def __init__(self, args, encoder, decoder):
-        super().__init__(args, encoder, decoder)
+    def __init__(self, cfg, encoder, decoder):
+        super().__init__(cfg, encoder, decoder)
         self.tgt_dict = decoder.dictionary
         self.bos = decoder.dictionary.bos()
         self.eos = decoder.dictionary.eos()
@@ -110,26 +110,17 @@ class FairseqNATModel(TransformerModel):
         self.encoder.ensemble_models = [m.encoder for m in models]
         self.decoder.ensemble_models = [m.decoder for m in models]
 
-    @staticmethod
-    def add_args(parser):
-        TransformerModel.add_args(parser)
-        parser.add_argument(
-            "--apply-bert-init",
-            action="store_true",
-            help="use custom param initialization for BERT",
-        )
-
     @classmethod
-    def build_decoder(cls, args, tgt_dict, embed_tokens):
-        decoder = FairseqNATDecoder(args, tgt_dict, embed_tokens)
-        if getattr(args, "apply_bert_init", False):
+    def build_decoder(cls, cfg, tgt_dict, embed_tokens):
+        decoder = FairseqNATDecoder(cfg, tgt_dict, embed_tokens)
+        if cfg.apply_bert_init:
             decoder.apply(init_bert_params)
         return decoder
 
     @classmethod
-    def build_encoder(cls, args, src_dict, embed_tokens):
-        encoder = FairseqNATEncoder(args, src_dict, embed_tokens)
-        if getattr(args, "apply_bert_init", False):
+    def build_encoder(cls, cfg, src_dict, embed_tokens):
+        encoder = FairseqNATEncoder(cfg, src_dict, embed_tokens)
+        if cfg.apply_bert_init:
             encoder.apply(init_bert_params)
         return encoder
 
@@ -146,9 +137,9 @@ class FairseqNATModel(TransformerModel):
         return NotImplementedError
 
 
-class FairseqNATEncoder(TransformerEncoder):
-    def __init__(self, args, dictionary, embed_tokens):
-        super().__init__(args, dictionary, embed_tokens)
+class FairseqNATEncoder(TransformerEncoderBase):
+    def __init__(self, cfg, dictionary, embed_tokens):
+        super().__init__(cfg, dictionary, embed_tokens)
         self.ensemble_models = None
 
     @ensemble_encoder
@@ -156,7 +147,7 @@ class FairseqNATEncoder(TransformerEncoder):
         return super().forward(*args, **kwargs)
 
 
-class FairseqNATDecoder(TransformerDecoder):
-    def __init__(self, args, dictionary, embed_tokens, no_encoder_attn=False):
-        super().__init__(args, dictionary, embed_tokens, no_encoder_attn)
+class FairseqNATDecoder(TransformerDecoderBase):
+    def __init__(self, cfg, dictionary, embed_tokens, no_encoder_attn=False):
+        super().__init__(cfg, dictionary, embed_tokens, no_encoder_attn)
         self.ensemble_models = None

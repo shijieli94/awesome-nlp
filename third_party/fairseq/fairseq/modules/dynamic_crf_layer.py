@@ -16,7 +16,6 @@ https://github.com/kmkurn/pytorch-crf/blob/master/torchcrf/__init__.py
 
 """
 
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -103,7 +102,7 @@ class DynamicCRF(nn.Module):
         beam = beam if beam is not None else self.beam
         batch_size, seq_len = emissions.size()[:2]
         if targets is not None:
-            _emissions = emissions.scatter(2, targets[:, :, None], np.float("inf"))
+            _emissions = emissions.scatter(2, targets[:, :, None], float("inf"))
             beam_targets = _emissions.topk(beam, 2)[1]
             beam_emission_scores = emissions.gather(2, beam_targets)
         else:

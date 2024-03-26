@@ -5,16 +5,10 @@
 
 from dataclasses import dataclass, field
 
-import torch
-from fairseq import utils
 from fairseq.data.language_pair_dataset import LanguagePairDataset
 from fairseq.dataclass import ChoiceEnum
 from fairseq.tasks import register_task
-from fairseq.tasks.translation import (
-    TranslationConfig,
-    TranslationTask,
-    load_langpair_dataset,
-)
+from fairseq.tasks.translation import TranslationConfig, TranslationTask
 from fairseq.utils import new_arange
 
 NOISE_CHOICES = ChoiceEnum(["random_delete", "random_mask", "no_noise", "full_mask"])
@@ -22,10 +16,9 @@ NOISE_CHOICES = ChoiceEnum(["random_delete", "random_mask", "no_noise", "full_ma
 
 @dataclass
 class TranslationLevenshteinConfig(TranslationConfig):
-    noise: NOISE_CHOICES = field(
-        default="random_delete",
-        metadata={"help": "type of noise"},
-    )
+    noise: NOISE_CHOICES = field(default="random_delete", metadata={"help": "type of noise"})
+    prepend_bos_src: bool = field(default=True, metadata={"help": "prepend src bos token"})
+    prepend_bos_tgt: bool = field(default=True, metadata={"help": "prepend tgt bos token"})
 
 
 @register_task("translation_lev", dataclass=TranslationLevenshteinConfig)
@@ -37,42 +30,18 @@ class TranslationLevenshteinTask(TranslationTask):
 
     cfg: TranslationLevenshteinConfig
 
-    def load_dataset(self, split, epoch=1, combine=False, **kwargs):
-        """Load a given dataset split.
-
-        Args:
-            split (str): name of the split (e.g., train, valid, test)
-        """
-        paths = utils.split_paths(self.cfg.data)
-        assert len(paths) > 0
-        data_path = paths[(epoch - 1) % len(paths)]
-
-        # infer langcode
-        src, tgt = self.cfg.source_lang, self.cfg.target_lang
-
-        self.datasets[split] = load_langpair_dataset(
-            data_path,
-            split,
-            src,
-            self.src_dict,
-            tgt,
-            self.tgt_dict,
-            combine=combine,
-            dataset_impl=self.cfg.dataset_impl,
-            upsample_primary=self.cfg.upsample_primary,
-            left_pad_source=self.cfg.left_pad_source,
-            left_pad_target=self.cfg.left_pad_target,
-            max_source_positions=self.cfg.max_source_positions,
-            max_target_positions=self.cfg.max_target_positions,
-            prepend_bos=True,
+    def load_dataset(self, *args, **kwargs):
+        super().load_dataset(
+            *args, **kwargs, prepend_bos_src=self.cfg.prepend_bos_src, prepend_bos_tgt=self.cfg.prepend_bos_tgt
         )
 
     def inject_noise(self, target_tokens):
-        def _random_delete(target_tokens):
-            pad = self.tgt_dict.pad()
-            bos = self.tgt_dict.bos()
-            eos = self.tgt_dict.eos()
+        pad = self.tgt_dict.pad()
+        bos = self.tgt_dict.bos()
+        eos = self.tgt_dict.eos()
+        unk = self.tgt_dict.unk()
 
+        def _random_delete(target_tokens):
             max_len = target_tokens.size(1)
             target_mask = target_tokens.eq(pad)
             target_score = target_tokens.clone().float().uniform_()
@@ -97,11 +66,6 @@ class TranslationLevenshteinTask(TranslationTask):
             return prev_target_tokens
 
         def _random_mask(target_tokens):
-            pad = self.tgt_dict.pad()
-            bos = self.tgt_dict.bos()
-            eos = self.tgt_dict.eos()
-            unk = self.tgt_dict.unk()
-
             target_masks = target_tokens.ne(pad) & target_tokens.ne(bos) & target_tokens.ne(eos)
             target_score = target_tokens.clone().float().uniform_()
             target_score.masked_fill_(~target_masks, 2.0)
@@ -115,11 +79,6 @@ class TranslationLevenshteinTask(TranslationTask):
             return prev_target_tokens
 
         def _full_mask(target_tokens):
-            pad = self.tgt_dict.pad()
-            bos = self.tgt_dict.bos()
-            eos = self.tgt_dict.eos()
-            unk = self.tgt_dict.unk()
-
             target_mask = target_tokens.eq(bos) | target_tokens.eq(eos) | target_tokens.eq(pad)
             return target_tokens.masked_fill(~target_mask, unk)
 
@@ -147,6 +106,7 @@ class TranslationLevenshteinTask(TranslationTask):
             decoding_format=getattr(args, "decoding_format", None),
             adaptive=not getattr(args, "iter_decode_force_max_iter", False),
             retain_history=getattr(args, "retain_iter_history", False),
+            length_format=getattr(args, "iter_decode_length_format", None),
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):
@@ -157,17 +117,13 @@ class TranslationLevenshteinTask(TranslationTask):
         return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary, append_bos=True)
 
     def train_step(self, sample, model, criterion, optimizer, update_num, ignore_grad=False):
-        model.train()
         sample["prev_target"] = self.inject_noise(sample["target"])
-        loss, sample_size, logging_output = criterion(model, sample)
-        if ignore_grad:
-            loss *= 0
-        optimizer.backward(loss)
+        loss, sample_size, logging_output = super().train_step(
+            sample, model, criterion, optimizer, update_num, ignore_grad=ignore_grad
+        )
         return loss, sample_size, logging_output
 
     def valid_step(self, sample, model, criterion):
-        model.eval()
-        with torch.no_grad():
-            sample["prev_target"] = self.inject_noise(sample["target"])
-            loss, sample_size, logging_output = criterion(model, sample)
+        sample["prev_target"] = self.inject_noise(sample["target"])
+        loss, sample_size, logging_output = super().valid_step(sample, model, criterion)
         return loss, sample_size, logging_output

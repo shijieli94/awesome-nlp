@@ -66,8 +66,8 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         loss = loss * factor
         return {"name": name, "loss": loss, "nll_loss": nll_loss, "factor": factor}
 
-    def _custom_loss(self, loss, name="loss", factor=1.0):
-        return {"name": name, "loss": loss, "factor": factor}
+    def _custom_loss(self, loss, nll_loss=0.0, name="loss", factor=1.0):
+        return {"name": name, "loss": loss, "nll_loss": nll_loss, "factor": factor}
 
     def forward(self, model, sample, reduce=True):
         """Compute the loss for the given sample.
@@ -88,19 +88,22 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
         outputs = model(src_tokens, src_lengths, prev_output_tokens, tgt_tokens)
         losses, nll_loss = [], []
 
+        output_logs = outputs.pop("output_logs", {})
+
         for obj in outputs:
             if outputs[obj].get("loss", None) is None:
                 _losses = self._compute_loss(
                     outputs[obj].get("out"),
                     outputs[obj].get("tgt"),
                     outputs[obj].get("mask", None),
-                    outputs[obj].get("ls", 0.0),
+                    outputs[obj].get("ls", self.label_smoothing),
                     name=obj + "-loss",
                     factor=outputs[obj].get("factor", 1.0),
                 )
             else:
                 _losses = self._custom_loss(
                     outputs[obj].get("loss"),
+                    nll_loss=outputs[obj].get("nll_loss", 0.0),
                     name=obj + "-loss",
                     factor=outputs[obj].get("factor", 1.0),
                 )
@@ -108,6 +111,16 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
             losses += [_losses]
             if outputs[obj].get("nll_loss", False):
                 nll_loss += [_losses.get("nll_loss", 0.0)]
+
+            if outputs[obj].get("report_accuracy", False):
+                lprobs = outputs[obj]["out"]
+                targets = outputs[obj]["tgt"]
+                mask = outputs[obj].get("mask", None)
+                if mask is None:
+                    mask = torch.ones_like(targets, dtype=torch.bool)
+                n_correct = (lprobs.argmax(-1).masked_select(mask) == targets.masked_select(mask)).sum()
+                output_logs[f"_{obj}@n_correct"] = utils.item(n_correct)
+                output_logs[f"_{obj}@total"] = utils.item(mask.sum())
 
         loss = sum(l["loss"] for l in losses)
         nll_loss = sum(l for l in nll_loss) if len(nll_loss) > 0 else loss.new_tensor(0)
@@ -126,8 +139,9 @@ class LabelSmoothedDualImitationCriterion(FairseqCriterion):
 
         for l in losses:
             logging_output[l["name"]] = (
-                utils.item(l["loss"].data / l["factor"]) if reduce else l[["loss"]].data / l["factor"]
+                utils.item(l["loss"].data / l["factor"]) if reduce else l["loss"].data / l["factor"]
             )
+        logging_output.update(output_logs)
 
         return loss, sample_size, logging_output
 

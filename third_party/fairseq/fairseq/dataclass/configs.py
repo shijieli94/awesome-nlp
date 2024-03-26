@@ -15,6 +15,7 @@ from fairseq.dataclass.constants import (
     DDP_COMM_HOOK_CHOICES,
     GENERATION_CONSTRAINTS_CHOICES,
     GENERATION_DECODING_FORMAT_CHOICES,
+    ITER_DECODE_LENGTH_FORMAT_CHOICES,
     LOG_FORMAT_CHOICES,
     PIPELINE_CHECKPOINT_CHOICES,
     PRINT_ALIGNMENT_CHOICES,
@@ -809,9 +810,12 @@ class GenerationConfig(FairseqDataclass):
         default=1,
         metadata={"help": "if > 1, model will generate translations varying by the lengths."},
     )
-    iter_decode_with_external_reranker: bool = field(
-        default=False,
+    iter_decode_with_external_reranker: Optional[str] = field(
+        default=None,
         metadata={"help": "if set, the last checkpoint are assumed to be a reranker to rescore the translations"},
+    )
+    iter_decode_length_format: Optional[ITER_DECODE_LENGTH_FORMAT_CHOICES] = field(
+        default=None, metadata={"help": "special decoding format for length predictor."}
     )
     retain_iter_history: bool = field(
         default=False,

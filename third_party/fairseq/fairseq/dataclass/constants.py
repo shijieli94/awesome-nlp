@@ -52,3 +52,4 @@ GENERATION_DECODING_FORMAT_CHOICES = ChoiceEnum(["unigram", "ensemble", "vote", 
 ZERO_SHARDING_CHOICES = ChoiceEnum(["none", "os"])
 PIPELINE_CHECKPOINT_CHOICES = ChoiceEnum(["always", "never", "except_last"])
 PRINT_ALIGNMENT_CHOICES = ChoiceEnum(["hard", "soft"])
+ITER_DECODE_LENGTH_FORMAT_CHOICES = ChoiceEnum(["topk", "oracle"])
