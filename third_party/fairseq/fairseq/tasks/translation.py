@@ -9,7 +9,7 @@ import logging
 import os
 from argparse import Namespace
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 from fairseq import utils
@@ -46,14 +46,16 @@ def load_langpair_dataset(
     left_pad_target,
     max_source_positions,
     max_target_positions,
-    prepend_bos=False,
+    prepend_bos_src=False,
+    prepend_bos_tgt=False,
     load_alignments=False,
     truncate_source=False,
     append_source_id=False,
     num_buckets=0,
     shuffle=True,
     pad_to_multiple=1,
-    prepend_bos_src=None,
+    dataset_class=None,
+    **unused,
 ):
     def split_exists(split, src, tgt, lang, data_path):
         filename = os.path.join(data_path, "{}.{}-{}.{}".format(split, src, tgt, lang))
@@ -110,14 +112,15 @@ def load_langpair_dataset(
         else:
             tgt_dataset = None
 
-    if prepend_bos:
-        assert hasattr(src_dict, "bos_index") and hasattr(tgt_dict, "bos_index")
+    if prepend_bos_src:
+        assert hasattr(src_dict, "bos_index")
+        logger.info(f"prepending bos index ({src_dict.bos()}) to the source dictionary")
         src_dataset = PrependTokenDataset(src_dataset, src_dict.bos())
-        if tgt_dataset is not None:
-            tgt_dataset = PrependTokenDataset(tgt_dataset, tgt_dict.bos())
-    elif prepend_bos_src is not None:
-        logger.info(f"prepending src bos: {prepend_bos_src}")
-        src_dataset = PrependTokenDataset(src_dataset, prepend_bos_src)
+
+    if tgt_dataset is not None and prepend_bos_tgt:
+        assert hasattr(tgt_dict, "bos_index")
+        logger.info(f"prepending bos index ({tgt_dict.bos()}) to the target dictionary")
+        tgt_dataset = PrependTokenDataset(tgt_dataset, tgt_dict.bos())
 
     eos = None
     if append_source_id:
@@ -133,7 +136,9 @@ def load_langpair_dataset(
             align_dataset = data_utils.load_indexed_dataset(align_path, None, dataset_impl)
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
-    return LanguagePairDataset(
+
+    dataset_class = dataset_class or LanguagePairDataset
+    return dataset_class(
         src_dataset,
         src_dataset.sizes,
         src_dict,
@@ -194,6 +199,7 @@ class TranslationConfig(FairseqDataclass):
 
     # options for reporting BLEU during validation
     eval_bleu: bool = field(default=False, metadata={"help": "evaluation with BLEU scores"})
+    eval_bleu_order: int = field(default=EVAL_BLEU_ORDER, metadata={"help": "the order of BLEU"})
     eval_bleu_args: Optional[str] = field(
         default="{}",
         metadata={"help": 'generation args for BLUE scoring, e.g., \'{"beam": 4, "lenpen": 0.6}\', as JSON string'},
@@ -219,6 +225,34 @@ class TranslationConfig(FairseqDataclass):
     )
     eval_bleu_print_samples: bool = field(
         default=False, metadata={"help": "print sample generations during validation"}
+    )
+    extra_special_tokens: int = field(
+        default=0,
+        metadata={
+            "help": "number of special tokens to add after data preprocessing. "
+            "This is useful because the preprocessing only contains four default special tokens. "
+            "Passing extra_special_symbols will shift token ids. "
+            "So in this case, special tokens will be appended to the last."
+        },
+    )
+    decode_remove_special_tokens: bool = field(
+        default=False, metadata={"help": "remove appended special tokens when decoding"}
+    )
+    filter_min_sizes: List[int] = field(
+        default_factory=lambda: [],
+        metadata={"help": "filter out samples that do not satisfy the specified min size constraints."},
+    )
+    filter_max_sizes: List[int] = field(
+        default_factory=lambda: [],
+        metadata={"help": "filter out samples that do not satisfy the specified max size constraints."},
+    )
+    filter_ratios: List[float] = field(
+        default_factory=lambda: [],
+        metadata={
+            "help": "filter out samples that do not satisfy the specified ratio constraints."
+            "If one value is provided, then tgt > src * filter_ratios[0] and src > tgt * filter_ratios[0] will be filtered out, "
+            "If two values are provided, then tgt > src * filter_ratios[0] and src > tgt * filter_ratios[1] will be filtered out."
+        },
     )
 
 
@@ -263,6 +297,14 @@ class TranslationTask(FairseqTask):
         # load dictionaries
         src_dict = cls.load_dictionary(os.path.join(paths[0], "dict.{}.txt".format(cfg.source_lang)))
         tgt_dict = cls.load_dictionary(os.path.join(paths[0], "dict.{}.txt".format(cfg.target_lang)))
+        if cfg.extra_special_tokens > 0:
+            logger.info(
+                "Appending {} extra special tokens to the source and target dictionaries".format(
+                    cfg.extra_special_tokens
+                )
+            )
+            src_dict.append_extra_tokens(n=cfg.extra_special_tokens)
+            tgt_dict.append_extra_tokens(n=cfg.extra_special_tokens)
         assert src_dict.pad() == tgt_dict.pad()
         assert src_dict.eos() == tgt_dict.eos()
         assert src_dict.unk() == tgt_dict.unk()
@@ -306,6 +348,7 @@ class TranslationTask(FairseqTask):
             num_buckets=self.cfg.num_batch_buckets,
             shuffle=(split != "test"),
             pad_to_multiple=self.cfg.required_seq_len_multiple,
+            **kwargs,
         )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths, constraints=None):
@@ -320,6 +363,14 @@ class TranslationTask(FairseqTask):
     def build_model(self, cfg, from_checkpoint=False):
         model = super().build_model(cfg, from_checkpoint)
         if self.cfg.eval_bleu:
+            import sacrebleu
+
+            self.bleu = sacrebleu.BLEU(
+                tokenize="none" if self.cfg.eval_tokenized_bleu else None,
+                max_ngram_order=self.cfg.eval_bleu_order,
+                trg_lang=self.cfg.target_lang,  # useful for deciding best tokenizer for languages such as Chinese and Japanese
+            )
+
             detok_args = json.loads(self.cfg.eval_bleu_detok_args)
             self.tokenizer = encoders.build_tokenizer(Namespace(tokenizer=self.cfg.eval_bleu_detok, **detok_args))
 
@@ -396,7 +447,32 @@ class TranslationTask(FairseqTask):
 
     def max_positions(self):
         """Return the max sentence length allowed by the task."""
-        return (self.cfg.max_source_positions, self.cfg.max_target_positions)
+        max_source_positions = self.cfg.max_source_positions
+        max_target_positions = self.cfg.max_target_positions
+
+        if len(self.cfg.filter_max_sizes) == 0:
+            return max_source_positions, max_target_positions
+        if len(self.cfg.filter_max_sizes) == 1:
+            return (
+                min(max_source_positions, self.cfg.filter_max_sizes[0]),
+                min(max_target_positions, self.cfg.filter_max_sizes[0]),
+            )
+        if len(self.cfg.filter_max_sizes) == 2:
+            return (
+                min(max_source_positions, self.cfg.filter_max_sizes[0]),
+                min(max_target_positions, self.cfg.filter_max_sizes[1]),
+            )
+        raise ValueError(f"Max length of `--filter-max-sizes` is 2 but found {len(self.cfg.filter_max_sizes)}")
+
+    def min_positions(self):
+        """Return the min sentence length allowed by the task."""
+        if len(self.cfg.filter_min_sizes) == 0:
+            return None, None
+        if len(self.cfg.filter_min_sizes) == 1:
+            return self.cfg.filter_min_sizes[0], self.cfg.filter_min_sizes[0]
+        if len(self.cfg.filter_min_sizes) == 2:
+            return self.cfg.filter_min_sizes[0], self.cfg.filter_min_sizes[1]
+        raise ValueError(f"Max length of `--filter-min-sizes` is 2 but found {len(self.cfg.filter_min_sizes)}")
 
     @property
     def source_dictionary(self):
@@ -409,8 +485,6 @@ class TranslationTask(FairseqTask):
         return self.tgt_dict
 
     def _inference_with_bleu(self, generator, sample, model):
-        import sacrebleu
-
         def decode(toks, escape_unk=False):
             s = self.tgt_dict.string(
                 toks.int().cpu(),
@@ -421,6 +495,7 @@ class TranslationTask(FairseqTask):
                 # alternative that is unlikely to appear in the real
                 # reference, but doesn't get split into multiple tokens.
                 unk_string=("UNKNOWNTOKENINREF" if escape_unk else "UNKNOWNTOKENINHYP"),
+                extra_symbols_to_ignore=self.tgt_dict.extra() if self.cfg.decode_remove_special_tokens else None,
             )
             if self.tokenizer:
                 s = self.tokenizer.decode(s)
@@ -439,7 +514,60 @@ class TranslationTask(FairseqTask):
         if self.cfg.eval_bleu_print_samples:
             logger.info("example hypothesis: " + hyps[0])
             logger.info("example reference: " + refs[0])
-        if self.cfg.eval_tokenized_bleu:
-            return sacrebleu.corpus_bleu(hyps, [refs], tokenize="none")
-        else:
-            return sacrebleu.corpus_bleu(hyps, [refs])
+
+        return self.bleu.corpus_score(hyps, [refs])
+
+    def filter_indices_by_size(self, indices, dataset, max_positions=None, ignore_invalid_inputs=False):
+        # filter indices by max_positions
+        indices, ignored = dataset.filter_indices_by_size(indices, max_positions)
+
+        # filter indices by min_positions
+        min_src_size, min_tgt_size = self.min_positions()
+
+        ignored_idx = np.array([False] * len(indices))
+        if min_src_size is not None:
+            ignored_idx |= dataset.src_sizes[indices] < min_src_size
+        if dataset.tgt_sizes is not None and min_tgt_size is not None:
+            ignored_idx |= dataset.tgt_sizes[indices] < min_tgt_size
+
+        ignored += indices[ignored_idx].tolist()
+        indices = indices[~ignored_idx]
+
+        # filter indices by ratio
+        if len(self.cfg.filter_ratios) > 0:
+            if len(self.cfg.filter_ratios) == 1:
+                upscale_src = upscale_tgt = self.cfg.filter_ratios[0]
+            elif len(self.cfg.filter_ratios) == 2:
+                upscale_src, upscale_tgt = self.cfg.filter_ratios
+            else:
+                raise ValueError(f"filter_ratios should have length 1 or 2, but got {len(self.cfg.filter_ratios)}")
+
+            ignored_idx = (dataset.tgt_sizes[indices] > dataset.src_sizes[indices] * upscale_src) | (
+                dataset.src_sizes[indices] > dataset.tgt_sizes[indices] * upscale_tgt
+            )
+            ignored += indices[ignored_idx].tolist()
+            indices = indices[~ignored_idx]
+
+        assert len(ignored) + len(indices) == len(dataset)
+
+        if len(ignored) > 0:
+            if not ignore_invalid_inputs:
+                raise Exception(
+                    (
+                        "Size of sample #{} is invalid (={}) since min_positions={}, max_positions={}, max_ratio={}, "
+                        "skip this example with --skip-invalid-size-inputs-valid-test"
+                    ).format(
+                        ignored[0],
+                        dataset.size(ignored[0]),
+                        self.min_positions(),
+                        max_positions,
+                        self.cfg.filter_ratios,
+                    )
+                )
+            logger.warning(
+                (
+                    "{:,} samples have invalid sizes and will be skipped, "
+                    "min_positions={}, max_positions={}, max_ratio={}, first few sample ids={}"
+                ).format(len(ignored), self.min_positions(), max_positions, self.cfg.filter_ratios, ignored[:10])
+            )
+        return indices
