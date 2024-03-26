@@ -13,7 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 logger = logging.getLogger(__name__)
 
 
-def hydra_init(cfg_name="config") -> None:
+def hydra_init(cfg_name="fairseq_config") -> None:
     cs = ConfigStore.instance()
     cs.store(name=f"{cfg_name}", node=FairseqConfig)
 

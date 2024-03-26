@@ -1,11 +1,10 @@
-# @package _group_
-
 hydra:
-  run:
-    dir: .
+  job:
+    chdir: false
 
 defaults:
     - _self_
+    - fairseq_config
     - task: null
     - model: null
     - criterion: cross_entropy

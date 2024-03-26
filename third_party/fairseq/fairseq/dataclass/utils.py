@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from fairseq.dataclass import FairseqDataclass
 from fairseq.dataclass.configs import FairseqConfig
+from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
-from hydra.experimental import compose, initialize
 from omegaconf import DictConfig, OmegaConf, _utils, open_dict
 
 logger = logging.getLogger(__name__)
@@ -363,9 +363,9 @@ def convert_namespace_to_omegaconf(args: Namespace) -> DictConfig:
 
     GlobalHydra.instance().clear()
 
-    with initialize(config_path=config_path):
+    with initialize(config_path=config_path, version_base="1.1"):
         try:
-            composed_cfg = compose("config", overrides=overrides, strict=False)
+            composed_cfg = compose("config", overrides=overrides)
         except:
             logger.error("Error when composing. Overrides: " + str(overrides))
             raise
