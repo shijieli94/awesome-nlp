@@ -27,6 +27,9 @@ class EncDecBaseConfig(FairseqDataclass):
     embed_dim: Optional[int] = field(default=512, metadata={"help": "embedding dimension"})
     ffn_embed_dim: int = field(default=2048, metadata={"help": "embedding dimension for FFN"})
     layers: int = field(default=6, metadata={"help": "number of layers"})
+    layers_to_share: Optional[List[int]] = field(
+        default=None, metadata={"help": "layer index to build shared layers, e.g., 1,1,2,2,3,3"}
+    )
     attention_heads: int = field(default=8, metadata={"help": "number of attention heads"})
     normalize_before: bool = field(default=False, metadata={"help": "apply layernorm before each block"})
     learned_pos: bool = field(default=False, metadata={"help": "use learned positional embeddings"})
@@ -38,6 +41,8 @@ class EncDecBaseConfig(FairseqDataclass):
         default=None,
         metadata={"help": "config for xFormers attention, defined in xformers.components.attention.AttentionConfig"},
     )
+    return_attns: bool = field(default=False, metadata={"help": "whether to return attention weights"})
+    return_head_attns: bool = field(default=False, metadata={"help": "whether to return attention head weights"})
 
 
 @dataclass

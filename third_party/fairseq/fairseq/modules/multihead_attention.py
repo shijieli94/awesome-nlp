@@ -494,6 +494,7 @@ class MultiheadAttention(FairseqIncrementalDecoder):
                     q_proj_weight=self.q_proj.weight,
                     k_proj_weight=self.k_proj.weight,
                     v_proj_weight=self.v_proj.weight,
+                    average_attn_weights=not need_head_weights,
                 )
 
         if incremental_state is not None:

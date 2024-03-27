@@ -41,14 +41,13 @@ class TransformerEncoderBase(FairseqEncoder):
         embed_tokens (torch.nn.Embedding): input embedding
     """
 
-    def __init__(self, cfg, dictionary, embed_tokens, return_fc=False):
+    def __init__(self, cfg, dictionary, embed_tokens):
         self.cfg = cfg
         super().__init__(dictionary)
         self.register_buffer("version", torch.Tensor([3]))
 
         self.dropout_module = FairseqDropout(cfg.dropout, module_name=module_name_fordropout(self.__class__.__name__))
         self.encoder_layerdrop = cfg.encoder.layerdrop
-        self.return_fc = return_fc
 
         embed_dim = embed_tokens.embedding_dim
         self.padding_idx = embed_tokens.padding_idx
@@ -87,6 +86,13 @@ class TransformerEncoderBase(FairseqEncoder):
         else:
             self.layers = nn.ModuleList([])
         self.layers.extend([self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)])
+        if cfg.encoder.layers_to_share:
+            layers_to_share = list(map(int, cfg.encoder.layers_to_share.split(",")))
+            assert set(layers_to_share) == set(
+                range(len(self.layers))
+            ), "Missing or unexpected index found in `--encoder-layers-to-share`"
+            self.layers = [self.layers[idx] for idx in layers_to_share]
+
         self.num_layers = len(self.layers)
 
         if cfg.encoder.normalize_before:
@@ -95,7 +101,7 @@ class TransformerEncoderBase(FairseqEncoder):
             self.layer_norm = None
 
     def build_encoder_layer(self, cfg):
-        layer = transformer_layer.TransformerEncoderLayerBase(cfg, return_fc=self.return_fc)
+        layer = transformer_layer.TransformerEncoderLayerBase(cfg)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -106,24 +112,31 @@ class TransformerEncoderBase(FairseqEncoder):
         layer = fsdp_wrap(layer, min_num_params=min_params_to_wrap)
         return layer
 
-    def forward_embedding(self, src_tokens, token_embedding: Optional[torch.Tensor] = None):
+    def forward_embedding(self, src_tokens, token_embedding: Optional[torch.Tensor] = None, return_pe: bool = False):
         # embed tokens and positions
         if token_embedding is None:
             token_embedding = self.embed_tokens(src_tokens)
         x = embed = self.embed_scale * token_embedding
+
+        pos_embed = None
         if self.embed_positions is not None:
-            x = embed + self.embed_positions(src_tokens)
+            pos_embed = self.embed_positions(src_tokens)
+            x = embed + pos_embed
+
         if self.layernorm_embedding is not None:
             x = self.layernorm_embedding(x)
         x = self.dropout_module(x)
         if self.quant_noise is not None:
             x = self.quant_noise(x)
+        if return_pe:
+            return x, embed, pos_embed
         return x, embed
 
     def forward(
         self,
         src_tokens,
         src_lengths: Optional[torch.Tensor] = None,
+        return_fc: bool = False,
         return_all_hiddens: bool = False,
         token_embeddings: Optional[torch.Tensor] = None,
     ):
@@ -150,7 +163,7 @@ class TransformerEncoderBase(FairseqEncoder):
                   hidden states of shape `(src_len, batch, embed_dim)`.
                   Only populated if *return_all_hiddens* is True.
         """
-        return self.forward_scriptable(src_tokens, src_lengths, return_all_hiddens, token_embeddings)
+        return self.forward_scriptable(src_tokens, src_lengths, return_fc, return_all_hiddens, token_embeddings)
 
     # TorchScript doesn't support super() method so that the scriptable Subclass
     # can't access the base class model in Torchscript.
@@ -160,6 +173,7 @@ class TransformerEncoderBase(FairseqEncoder):
         self,
         src_tokens,
         src_lengths: Optional[torch.Tensor] = None,
+        return_fc: bool = False,
         return_all_hiddens: bool = False,
         token_embeddings: Optional[torch.Tensor] = None,
     ):
@@ -201,6 +215,7 @@ class TransformerEncoderBase(FairseqEncoder):
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
 
+        attns = []
         encoder_states = []
         fc_results = []
 
@@ -209,18 +224,21 @@ class TransformerEncoderBase(FairseqEncoder):
 
         # encoder layers
         for layer in self.layers:
-            lr = layer(x, encoder_padding_mask=encoder_padding_mask if has_pads else None)
-
-            if isinstance(lr, tuple) and len(lr) == 2:
-                x, fc_result = lr
-            else:
-                x = lr
-                fc_result = None
+            x, layer_attn, fc_result = layer(
+                x,
+                encoder_padding_mask=encoder_padding_mask if has_pads else None,
+                return_fc=return_fc,
+                need_attn=self.cfg.encoder.return_attns,
+                need_head_weights=self.cfg.encoder.return_head_attns,
+            )
 
             if return_all_hiddens and not torch.jit.is_scripting():
                 assert encoder_states is not None
                 encoder_states.append(x)
-                fc_results.append(fc_result)
+                if return_fc:
+                    fc_results.append(fc_result)
+            if self.cfg.encoder.return_attns:
+                attns.append(layer_attn)
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)
@@ -238,6 +256,7 @@ class TransformerEncoderBase(FairseqEncoder):
             "fc_results": fc_results,  # List[T x B x C]
             "src_tokens": [],
             "src_lengths": [src_lengths],
+            "encoder_attns": attns,  # List[T x B x C]
         }
 
     @torch.jit.export
@@ -280,6 +299,11 @@ class TransformerEncoderBase(FairseqEncoder):
             for idx, state in enumerate(encoder_states):
                 encoder_states[idx] = state.index_select(1, new_order)
 
+        encoder_attns = encoder_out["encoder_attns"]
+        if len(encoder_attns) > 0:
+            for idx, attn in enumerate(encoder_attns):
+                encoder_attns[idx] = attn.index_select(1, new_order)
+
         return {
             "encoder_out": new_encoder_out,  # T x B x C
             "encoder_padding_mask": new_encoder_padding_mask,  # B x T
@@ -287,6 +311,7 @@ class TransformerEncoderBase(FairseqEncoder):
             "encoder_states": encoder_states,  # List[T x B x C]
             "src_tokens": src_tokens,  # B x T
             "src_lengths": src_lengths,  # B x 1
+            "encoder_attns": encoder_attns,  # List[T x B x C]
         }
 
     @torch.jit.export
@@ -316,13 +341,12 @@ class TransformerEncoderBase(FairseqEncoder):
 
 
 class TransformerEncoder(TransformerEncoderBase):
-    def __init__(self, args, dictionary, embed_tokens, return_fc=False):
+    def __init__(self, args, dictionary, embed_tokens):
         self.args = args
         super().__init__(
             TransformerConfig.from_namespace(args),
             dictionary,
             embed_tokens,
-            return_fc=return_fc,
         )
 
     def build_encoder_layer(self, args):

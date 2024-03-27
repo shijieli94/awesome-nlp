@@ -31,10 +31,9 @@ class TransformerEncoderLayerBase(nn.Module):
         cfg (argparse.Namespace): parsed command-line arguments
     """
 
-    def __init__(self, cfg, return_fc=False):
+    def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.return_fc = return_fc
         self.embed_dim = cfg.encoder.embed_dim
         self.quant_noise = cfg.quant_noise.pq
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
@@ -64,6 +63,7 @@ class TransformerEncoderLayerBase(nn.Module):
         )
 
         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
+        self.need_attn = True
 
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size)
@@ -157,6 +157,9 @@ class TransformerEncoderLayerBase(nn.Module):
         x,
         encoder_padding_mask: Optional[Tensor],
         attn_mask: Optional[Tensor] = None,
+        return_fc: bool = False,
+        need_attn: bool = False,
+        need_head_weights: bool = False,
     ):
         """
         Args:
@@ -184,12 +187,13 @@ class TransformerEncoderLayerBase(nn.Module):
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
-        x, _ = self.self_attn(
+        x, attn = self.self_attn(
             query=x,
             key=x,
             value=x,
             key_padding_mask=encoder_padding_mask,
-            need_weights=False,
+            need_weights=need_attn and self.need_attn,
+            need_head_weights=need_head_weights,
             attn_mask=attn_mask,
         )
         x = self.dropout_module(x)
@@ -211,9 +215,12 @@ class TransformerEncoderLayerBase(nn.Module):
         if not self.normalize_before:
             x = self.final_layer_norm(x)
 
-        if self.return_fc and not torch.jit.is_scripting():
-            return x, fc_result
-        return x
+        if return_fc and not torch.jit.is_scripting():
+            return x, attn, fc_result
+        return x, attn, None
+
+    def make_generation_fast_(self, need_attn: bool = False, **kwargs):
+        self.need_attn = need_attn
 
 
 # backward compatible with the legacy argparse format
@@ -245,6 +252,7 @@ class TransformerDecoderLayerBase(nn.Module):
 
     def __init__(self, cfg, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False):
         super().__init__()
+        self.cfg = cfg
         self.embed_dim = cfg.decoder.embed_dim
         self.dropout_module = FairseqDropout(cfg.dropout, module_name=self.__class__.__name__)
         self.quant_noise = cfg.quant_noise.pq
@@ -360,6 +368,7 @@ class TransformerDecoderLayerBase(nn.Module):
         self_attn_padding_mask: Optional[torch.Tensor] = None,
         need_attn: bool = False,
         need_head_weights: bool = False,
+        **kwargs,
     ):
         """
         Args:
@@ -409,13 +418,14 @@ class TransformerDecoderLayerBase(nn.Module):
         else:
             y = x
 
-        x, attn = self.self_attn(
+        x, self_attn = self.self_attn(
             query=x,
             key=y,
             value=y,
             key_padding_mask=self_attn_padding_mask,
             incremental_state=incremental_state,
-            need_weights=False,
+            need_weights=need_attn and self.need_attn,
+            need_head_weights=need_head_weights,
             attn_mask=self_attn_mask,
         )
         if self.c_attn is not None:
@@ -430,6 +440,7 @@ class TransformerDecoderLayerBase(nn.Module):
         if not self.normalize_before:
             x = self.self_attn_layer_norm(x)
 
+        cross_attn = None
         if self.encoder_attn is not None and encoder_out is not None:
             residual = x
             if self.normalize_before:
@@ -445,14 +456,14 @@ class TransformerDecoderLayerBase(nn.Module):
                 assert incremental_state is not None
                 self.encoder_attn._set_input_buffer(incremental_state, saved_state)
 
-            x, attn = self.encoder_attn(
+            x, cross_attn = self.encoder_attn(
                 query=x,
                 key=encoder_out,
                 value=encoder_out,
                 key_padding_mask=encoder_padding_mask,
                 incremental_state=incremental_state,
                 static_kv=True,
-                need_weights=need_attn or (not self.training and self.need_attn),
+                need_weights=need_attn and self.need_attn,
                 need_head_weights=need_head_weights,
             )
             x = self.dropout_module(x)
@@ -486,8 +497,8 @@ class TransformerDecoderLayerBase(nn.Module):
                 ]
             else:
                 self_attn_state = [saved_state["prev_key"], saved_state["prev_value"]]
-            return x, attn, self_attn_state
-        return x, attn, None
+            return x, self_attn, cross_attn, self_attn_state
+        return x, self_attn, cross_attn, None
 
     def make_generation_fast_(self, need_attn: bool = False, **kwargs):
         self.need_attn = need_attn
