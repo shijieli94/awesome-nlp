@@ -428,3 +428,140 @@ class TransformerDecoder(TransformerDecoderBase):
 
     def build_decoder_layer(self, args, no_encoder_attn=False):
         return super().build_decoder_layer(TransformerConfig.from_namespace(args), no_encoder_attn=no_encoder_attn)
+
+
+class LSTransformerDecoder(FairseqIncrementalDecoder):
+    def __init__(self, cfg, dictionary, embed_tokens, **kwargs):
+        self.cfg = cfg
+        super().__init__(dictionary)
+
+        self._future_mask = torch.empty(0)
+
+        embed_dim = cfg.decoder.embed_dim
+        self.embed_tokens = embed_tokens
+        self.padding_idx = self.embed_tokens.config.padding_idx
+
+        self.layers = nn.ModuleList([self.build_decoder_layer(cfg) for _ in range(cfg.decoder.layers)])
+        self.num_layers = len(self.layers)
+
+        if cfg.decoder.normalize_before and not cfg.no_decoder_final_norm:
+            self.layer_norm = LayerNorm(embed_dim)
+        else:
+            self.layer_norm = None
+
+        if cfg.use_torch_layer:
+            from lightseq.training.ops.pytorch.quantization import QuantLinear
+
+            self.output_projection = QuantLinear(
+                self.embed_tokens.embeddings.shape[1],
+                self.embed_tokens.embeddings.shape[0],
+                bias=False,
+            )
+            self.output_projection.weight_quant = self.embed_tokens.emb_quant
+            self.output_projection.weight = self.embed_tokens.embeddings
+        else:
+            from lightseq.training.ops.pytorch.quant_linear_layer import (
+                LSQuantLinearLayer,
+            )
+
+            config = LSQuantLinearLayer.get_config(
+                max_batch_tokens=self.cfg.max_tokens,
+                in_features=self.embed_tokens.config.embedding_dim,
+                out_features=self.embed_tokens.config.vocab_size,
+                bias=False,
+                fp16=self.cfg.fp16,
+                local_rank=self.cfg.device_id,
+            )
+            self.output_projection = LSQuantLinearLayer(config)
+            del self.output_projection.weight
+
+        self.quant_mode = cfg.enable_quant
+        self.use_torch_layer = cfg.use_torch_layer
+
+    def build_decoder_layer(self, cfg):
+        if cfg.use_torch_layer:
+            from lightseq.training.ops.pytorch.torch_transformer_layers import (
+                TransformerDecoderLayer,
+            )
+        else:
+            from fairseq.modules.ls_transformer_decoder_layer import (
+                LSFSTransformerDecoderLayer as TransformerDecoderLayer,
+            )
+
+        config = TransformerDecoderLayer.get_config(
+            max_batch_tokens=cfg.max_tokens,
+            max_seq_len=cfg.decoder.max_positions,
+            hidden_size=cfg.decoder.embed_dim,
+            intermediate_size=cfg.decoder.ffn_embed_dim,
+            nhead=cfg.decoder.attention_heads,
+            attn_prob_dropout_ratio=cfg.attention_dropout,
+            activation_dropout_ratio=cfg.activation_dropout,
+            hidden_dropout_ratio=cfg.dropout,
+            pre_layer_norm=cfg.decoder.normalize_before,
+            fp16=cfg.fp16,
+            local_rank=cfg.device_id,
+            nlayer=cfg.decoder.layers,
+            activation_fn=cfg.activation_fn,
+        )
+        return TransformerDecoderLayer(config)
+
+    def forward_embedding(self, prev_output_tokens, incremental_state=None):
+        step = 0
+        if incremental_state is not None:
+            step = prev_output_tokens.size(1) - 1
+            prev_output_tokens = prev_output_tokens[:, -1:]
+
+        x = self.embed_tokens(prev_output_tokens, step)
+        return x, prev_output_tokens
+
+    def forward(self, prev_output_tokens, encoder_out, incremental_state=None, features_only=False, **kwargs):
+        x, prev_output_tokens = self.forward_embedding(prev_output_tokens, incremental_state)
+
+        if not self.use_torch_layer:
+            self.output_projection.weight = self.embed_tokens.para[
+                : self.embed_tokens.config.vocab_size * self.embed_tokens.config.embedding_dim
+            ].reshape(
+                self.embed_tokens.config.vocab_size,
+                self.embed_tokens.config.embedding_dim,
+            )
+            if self.quant_mode:
+                self.output_projection.clip_max[1] = self.embed_tokens.para[-1].data
+
+        # x: [batch_size, seq_len, hidden_size]
+        for _, layer in enumerate(self.layers):
+            if incremental_state is None:
+                self_attn_mask = self.buffered_future_mask(x)
+            else:
+                self_attn_mask = None
+
+            x, _, _ = layer(
+                x,
+                encoder_out=encoder_out.encoder_out,
+                encoder_padding_mask=encoder_out.encoder_padding_mask,
+                self_attn_mask=self_attn_mask,
+                incremental_state=incremental_state,
+            )
+
+        if self.layer_norm is not None:
+            x = self.layer_norm(x)
+
+        if not features_only:
+            x = self.output_projection(x)
+        return x, None
+
+    def max_positions(self):
+        """Maximum output length supported by the decoder."""
+        return self.cfg.decoder.max_positions
+
+    def buffered_future_mask(self, tensor):
+        tensor = tensor.transpose(0, 1)
+        dim = tensor.size(0)
+        # self._future_mask.device != tensor.device is not working in TorchScript. This is a workaround.
+        if (
+            self._future_mask.size(0) == 0
+            or (not self._future_mask.device == tensor.device)
+            or self._future_mask.size(0) < dim
+        ):
+            self._future_mask = torch.triu(utils.fill_with_neg_inf(torch.zeros([dim, dim])), 1)
+        self._future_mask = self._future_mask.to(tensor)
+        return self._future_mask[:dim, :dim]

@@ -26,6 +26,7 @@ class FairseqAdamConfig(FairseqDataclass):
     adam_eps: float = field(default=1e-8, metadata={"help": "epsilon for Adam optimizer"})
     weight_decay: float = field(default=0.0, metadata={"help": "weight decay"})
     use_old_adam: bool = field(default=False, metadata={"help": "Use fairseq.optim.adam.Adam"})
+    use_ls_adam: bool = field(default=False, metadata={"help": "Use lightseq ls_adam"})
     fp16_adam_stats: bool = field(default=False, metadata={"help": "use FP16 stats (with automatic scaling)"})
     # TODO common vars below in parent
     tpu: bool = II("common.tpu")
@@ -56,6 +57,11 @@ class FairseqAdam(FairseqOptimizer):
         elif use_fused_adam:
             logger.info("using FusedAdam")
             self._optimizer = fused_adam_cls(params, use_fp16_stats=self.cfg.fp16_adam_stats, **self.optimizer_config)
+        elif self.cfg.use_ls_adam:
+            logger.info("using lightseq ls_adam")
+            from lightseq.training.ops.pytorch.adam import LSAdam
+
+            self._optimizer = LSAdam(params, **self.optimizer_config)
         else:
             if self.cfg.fp16_adam_stats:
                 raise NotImplementedError("--fp16-adam-stats is only supported with FusedAdamV1")

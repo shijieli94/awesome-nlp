@@ -4,11 +4,13 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 from fairseq import utils
+from fairseq.dataclass import ChoiceEnum
 from fairseq.dataclass.utils import gen_parser_from_dataclass
 from fairseq.models import (
     FairseqEncoderDecoderModel,
@@ -20,9 +22,13 @@ from fairseq.models.transformer import (
     TransformerDecoderBase,
     TransformerEncoderBase,
 )
+from omegaconf import II
 from torch import Tensor
 
 logger = logging.getLogger(__name__)
+
+
+QUANT_MODE_CHOICES = ChoiceEnum(["qat", "ptq"])
 
 
 @register_model("transformer", dataclass=TransformerConfig)
@@ -212,7 +218,142 @@ class TransformerModel(TransformerModelBase):
     pass
 
 
+@dataclass
+class LSTransformerConfig(TransformerConfig):
+    use_torch_layer: bool = field(
+        default=False, metadata={"help": "use custom torch layer instead of LightSeq cuda layer"}
+    )
+    enable_quant: bool = field(default=False, metadata={"help": "enable quantization"})
+    quant_mode: str = field(default="qat", metadata={"help": "quantization mode"})
+    # args for Gradient Communication Quantization (GCQ) in multi-machine distributed training
+    enable_GCQ: bool = field(default=False, metadata={"help": "enable gradient communication quantization"})
+    GCQ_quantile: float = field(
+        default=0.99, metadata={"help": "quantile value of gradient communication quantization, between 0.0-1.0"}
+    )
+    max_tokens: Optional[int] = II("dataset.max_tokens")
+    device_id: int = II("distributed_training.device_id")
+
+
+@register_model("ls_transformer", dataclass=LSTransformerConfig)
+class LSTransformerModel(FairseqEncoderDecoderModel):
+    def __init__(self, cfg, encoder, decoder):
+        super().__init__(encoder, decoder)
+        self.cfg = cfg
+
+    @classmethod
+    def build_model(cls, cfg, task):
+        src_dict, tgt_dict = task.source_dictionary, task.target_dictionary
+        if cfg.share_all_embeddings:
+            if src_dict != tgt_dict:
+                raise ValueError("--share-all-embeddings requires a joined dictionary")
+            if cfg.encoder_embed_dim != cfg.decoder_embed_dim:
+                raise ValueError("--share-all-embeddings requires --encoder-embed-dim to match --decoder-embed-dim")
+            encoder_embed_tokens = cls.build_embedding(cfg, src_dict, cfg.encoder.embed_dim, cfg.encoder.max_positions)
+            decoder_embed_tokens = cls.build_embedding(
+                cfg,
+                tgt_dict,
+                cfg.decoder.embed_dim,
+                cfg.decoder.max_positions,
+                emb_lookup=encoder_embed_tokens,
+            )
+            cfg.share_decoder_input_output_embed = True
+        else:
+            encoder_embed_tokens = cls.build_embedding(cfg, src_dict, cfg.encoder.embed_dim, cfg.encoder.max_positions)
+            decoder_embed_tokens = cls.build_embedding(cfg, tgt_dict, cfg.decoder.embed_dim, cfg.decoder.max_positions)
+
+        encoder = cls.build_encoder(cfg, src_dict, encoder_embed_tokens)
+        decoder = cls.build_decoder(cfg, tgt_dict, decoder_embed_tokens)
+
+        from lightseq.training.ops.pytorch.quantization import (
+            disable_quant,
+            enable_quant,
+            ptq_mode,
+            qat_mode,
+        )
+
+        if cfg.enable_quant:
+            if cfg.use_torch_layer:
+                if cfg.quant_mode == "qat":
+                    encoder.apply(qat_mode)
+                    decoder.apply(qat_mode)
+                elif cfg.quant_mode == "ptq":
+                    encoder.apply(ptq_mode)
+                    decoder.apply(ptq_mode)
+            else:
+                if cfg.quant_mode == "qat":
+                    encoder.apply(enable_quant)
+                    decoder.apply(enable_quant)
+                    encoder.apply(qat_mode)
+                    decoder.apply(qat_mode)
+
+                else:
+                    raise NotImplementedError
+        else:
+            encoder.apply(disable_quant)
+            decoder.apply(disable_quant)
+
+        return cls(cfg, encoder, decoder)
+
+    @classmethod
+    def build_embedding(cls, cfg, dictionary, embed_dim, max_positions, emb_lookup=None, **kwargs):
+        from lightseq.training.ops.pytorch.layer_base import (
+            TransformerEmbeddingLayerBase,
+        )
+
+        use_torch_layer = cfg.use_torch_layer or cfg.no_scale_embedding or cfg.layernorm_embedding
+        config = TransformerEmbeddingLayerBase.get_config(
+            vocab_size=len(dictionary),
+            embedding_dim=embed_dim,
+            max_batch_tokens=cfg.max_tokens,
+            max_seq_len=max_positions,
+            padding_idx=dictionary.pad(),
+            dropout=cfg.dropout,
+            fp16=cfg.fp16,
+            local_rank=cfg.device_id,
+            trainable_pos=(cfg.encoder.learned_pos or cfg.decoder.learned_pos),
+            no_scale_embedding=cfg.no_scale_embedding,
+            layernorm_embedding=cfg.layernorm_embedding,
+            need_offset=("bart" in cfg.arch),
+        )
+        if use_torch_layer:
+            from lightseq.training.ops.pytorch.torch_transformer_layers import (
+                TransformerEmbeddingLayer,
+            )
+
+            if emb_lookup is not None:
+                emb_lookup = emb_lookup.emb_lookup
+            emb = TransformerEmbeddingLayer(config, emb_lookup=emb_lookup)
+        else:
+            from lightseq.training.ops.pytorch.transformer_embedding_layer import (
+                LSTransformerEmbeddingLayer as TransformerEmbeddingLayer,
+            )
+
+            if emb_lookup is not None:
+                return emb_lookup
+            emb = TransformerEmbeddingLayer(config)
+
+        return emb
+
+    @classmethod
+    def build_encoder(cls, cfg, src_dict, embed_tokens):
+        from .transformer_encoder import LSTransformerEncoder
+
+        return LSTransformerEncoder(cfg, src_dict, embed_tokens)
+
+    @classmethod
+    def build_decoder(cls, cfg, tgt_dict, embed_tokens):
+        from .transformer_decoder import LSTransformerDecoder
+
+        return LSTransformerDecoder(cfg, tgt_dict, embed_tokens)
+
+    def forward(self, src_tokens, prev_output_tokens, features_only=False, **kwargs):
+        encoder_out = self.encoder(src_tokens)
+        decoder_out = self.decoder(prev_output_tokens, encoder_out, features_only=features_only)
+        return decoder_out
+
+
 @register_model_architecture("transformer", "transformer_tiny")
+@register_model_architecture("ls_transformer", "ls_transformer_tiny")
 def tiny_architecture(args):
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 64)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 64)
@@ -273,6 +414,7 @@ def base_architecture(args):
 
 
 @register_model_architecture("transformer", "transformer_iwslt_de_en")
+@register_model_architecture("ls_transformer", "ls_transformer_iwslt_de_en")
 def transformer_iwslt_de_en(args):
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 512)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
@@ -286,12 +428,14 @@ def transformer_iwslt_de_en(args):
 
 
 @register_model_architecture("transformer", "transformer_wmt_en_de")
+@register_model_architecture("ls_transformer", "ls_transformer_wmt_en_de")
 def transformer_wmt_en_de(args):
     base_architecture(args)
 
 
 # parameters used in the "Attention Is All You Need" paper (Vaswani et al., 2017)
 @register_model_architecture("transformer", "transformer_vaswani_wmt_en_de_big")
+@register_model_architecture("ls_transformer", "ls_transformer_vaswani_wmt_en_de_big")
 def transformer_vaswani_wmt_en_de_big(args):
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 1024)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 4096)
@@ -305,12 +449,14 @@ def transformer_vaswani_wmt_en_de_big(args):
 
 
 @register_model_architecture("transformer", "transformer_vaswani_wmt_en_fr_big")
+@register_model_architecture("ls_transformer", "ls_transformer_vaswani_wmt_en_fr_big")
 def transformer_vaswani_wmt_en_fr_big(args):
     args.dropout = getattr(args, "dropout", 0.1)
     transformer_vaswani_wmt_en_de_big(args)
 
 
 @register_model_architecture("transformer", "transformer_wmt_en_de_big")
+@register_model_architecture("ls_transformer", "ls_transformer_wmt_en_de_big")
 def transformer_wmt_en_de_big(args):
     args.attention_dropout = getattr(args, "attention_dropout", 0.1)
     transformer_vaswani_wmt_en_de_big(args)
@@ -318,6 +464,7 @@ def transformer_wmt_en_de_big(args):
 
 # default parameters used in tensor2tensor implementation
 @register_model_architecture("transformer", "transformer_wmt_en_de_big_t2t")
+@register_model_architecture("ls_transformer", "ls_transformer_wmt_en_de_big_t2t")
 def transformer_wmt_en_de_big_t2t(args):
     args.encoder_normalize_before = getattr(args, "encoder_normalize_before", True)
     args.decoder_normalize_before = getattr(args, "decoder_normalize_before", True)

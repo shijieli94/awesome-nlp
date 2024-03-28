@@ -11,6 +11,7 @@ import torch.nn as nn
 from fairseq import utils
 from fairseq.distributed import fsdp_wrap
 from fairseq.models import FairseqEncoder
+from fairseq.models.fairseq_encoder import EncoderOut
 from fairseq.models.transformer import TransformerConfig
 from fairseq.modules import transformer_layer
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
@@ -352,4 +353,115 @@ class TransformerEncoder(TransformerEncoderBase):
     def build_encoder_layer(self, args):
         return super().build_encoder_layer(
             TransformerConfig.from_namespace(args),
+        )
+
+
+class LSTransformerEncoder(FairseqEncoder):
+    def __init__(self, cfg, dictionary, embed_tokens):
+        self.cfg = cfg
+        super().__init__(dictionary)
+
+        embed_dim = cfg.encoder.embed_dim
+        self.embed_tokens = embed_tokens
+        self.padding_idx = self.embed_tokens.config.padding_idx
+
+        self.layers = nn.ModuleList([self.build_encoder_layer(cfg) for _ in range(cfg.encoder.layers)])
+        self.num_layers = len(self.layers)
+
+        if cfg.encoder.normalize_before:
+            self.layer_norm = LayerNorm(embed_dim)
+        else:
+            self.layer_norm = None
+
+    def build_encoder_layer(self, cfg):
+        if cfg.use_torch_layer:
+            from lightseq.training.ops.pytorch import TransformerEncoderLayer
+        else:
+            from lightseq.training.ops.pytorch.transformer_encoder_layer import (
+                LSTransformerEncoderLayer as TransformerEncoderLayer,
+            )
+
+        config = TransformerEncoderLayer.get_config(
+            max_batch_tokens=cfg.max_tokens,
+            max_seq_len=cfg.encoder.max_positions,
+            hidden_size=cfg.encoder.embed_dim,
+            intermediate_size=cfg.encoder.ffn_embed_dim,
+            nhead=cfg.encoder.attention_heads,
+            attn_prob_dropout_ratio=cfg.attention_dropout,
+            activation_dropout_ratio=cfg.activation_dropout,
+            hidden_dropout_ratio=cfg.dropout,
+            pre_layer_norm=cfg.encoder.normalize_before,
+            fp16=cfg.fp16,
+            local_rank=cfg.device_id,
+            activation_fn=cfg.activation_fn,
+        )
+
+        return TransformerEncoderLayer(config)
+
+    def forward_embedding(self, src_tokens):
+        x = self.embed_tokens(src_tokens)
+        return x
+
+    def forward(self, src_tokens, **kwargs):
+        x = self.forward_embedding(src_tokens)
+
+        encoder_padding_mask = src_tokens.eq(self.padding_idx)
+
+        # x: [batch_size, seq_len, hidden_size]
+        for layer in self.layers:
+            x = layer(x, encoder_padding_mask)
+        if self.layer_norm is not None:
+            x = self.layer_norm(x)
+        self.batch_size = x.shape[0]
+        self.beam_size = -1
+
+        # B x T x C -> T x B x C
+        x = x.transpose(0, 1)
+
+        return EncoderOut(
+            encoder_out=x,  # T x B x C
+            encoder_padding_mask=encoder_padding_mask,  # B x T
+            encoder_embedding=None,  # B x T x C
+            encoder_states=None,
+            src_tokens=None,
+            src_lengths=None,
+        )
+
+    def max_positions(self):
+        """Maximum input length supported by the encoder."""
+        return self.cfg.encoder.max_positions
+
+    @torch.jit.export
+    def reorder_encoder_out(self, encoder_out: EncoderOut, new_order):
+        """
+        Reorder encoder output according to *new_order*.
+
+        Args:
+            encoder_out: output from the ``forward()`` method
+            new_order (LongTensor): desired order
+
+        Returns:
+            *encoder_out* rearranged according to *new_order*
+        """
+        """
+        Since encoder_padding_mask and encoder_embedding are both of type
+        Optional[Tensor] in EncoderOut, they need to be copied as local
+        variables for Torchscript Optional refinement
+        """
+
+        if self.beam_size < 0:
+            self.beam_size = int(new_order.shape[0] / self.batch_size)
+        else:
+            new_order = new_order // self.beam_size
+        new_order = new_order[:: self.beam_size]
+        new_encoder_out = encoder_out.encoder_out.index_select(1, new_order)
+        new_encoder_padding_mask = encoder_out.encoder_padding_mask.index_select(0, new_order)
+
+        return EncoderOut(
+            encoder_out=new_encoder_out,  # T x B x C
+            encoder_padding_mask=new_encoder_padding_mask,  # B x T
+            encoder_embedding=None,  # B x T x C
+            encoder_states=None,
+            src_tokens=None,
+            src_lengths=None,
         )
