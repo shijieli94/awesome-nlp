@@ -105,7 +105,9 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
             self.layers = LayerDropModuleList(p=self.decoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-        self.layers.extend([self.build_decoder_layer(cfg, no_encoder_attn) for _ in range(cfg.decoder.layers)])
+        self.layers.extend(
+            [self.build_decoder_layer(cfg, no_encoder_attn, layer_idx=i) for i in range(cfg.decoder.layers)]
+        )
         if cfg.decoder.layers_to_share:
             layers_to_share = list(map(int, cfg.decoder.layers_to_share.split(",")))
             assert set(layers_to_share) == set(
@@ -159,8 +161,9 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
                 BaseLayer(cfg),
             )
 
-    def build_decoder_layer(self, cfg, no_encoder_attn=False):
-        layer = transformer_layer.TransformerDecoderLayerBase(cfg, no_encoder_attn)
+    def build_decoder_layer(self, cfg, no_encoder_attn=False, layer=None, layer_idx=None):
+        if layer is None:
+            layer = transformer_layer.TransformerDecoderLayerBase(cfg, no_encoder_attn)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -426,8 +429,10 @@ class TransformerDecoder(TransformerDecoderBase):
     def build_output_projection(self, args, dictionary, embed_tokens):
         super().build_output_projection(TransformerConfig.from_namespace(args), dictionary, embed_tokens)
 
-    def build_decoder_layer(self, args, no_encoder_attn=False):
-        return super().build_decoder_layer(TransformerConfig.from_namespace(args), no_encoder_attn=no_encoder_attn)
+    def build_decoder_layer(self, args, no_encoder_attn=False, layer=None):
+        return super().build_decoder_layer(
+            TransformerConfig.from_namespace(args), no_encoder_attn=no_encoder_attn, layer=layer
+        )
 
 
 class LSTransformerDecoder(FairseqIncrementalDecoder):

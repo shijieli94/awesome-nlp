@@ -66,13 +66,15 @@ class AugTransformerDecoderBase(TransformerDecoderBase):
         cfg,
         encoder_attn_merge_type="sequential",
         dropnet_ratio=0,
+        layer=None,
     ):
-        layer = transformer_layer_aug.AugTransformerDecoderLayerBase(
-            cfg,
-            no_encoder_attn=False,
-            encoder_attn_merge_type=encoder_attn_merge_type,
-            dropnet_ratio=dropnet_ratio,
-        )
+        if layer is None:
+            layer = transformer_layer_aug.AugTransformerDecoderLayerBase(
+                cfg,
+                no_encoder_attn=False,
+                encoder_attn_merge_type=encoder_attn_merge_type,
+                dropnet_ratio=dropnet_ratio,
+            )
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -355,10 +357,12 @@ class AugTransformerDecoder(AugTransformerDecoderBase):
         args,
         encoder_attn_merge_type="sequential",
         dropnet_ratio=0,
+        layer=None,
     ):
         return super().build_decoder_layer(
             TransformerConfig.from_namespace(args),
             no_encoder_attn=False,
             encoder_attn_merge_type=encoder_attn_merge_type,
             dropnet_ratio=dropnet_ratio,
+            layer=layer,
         )

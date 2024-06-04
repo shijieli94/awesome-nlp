@@ -86,7 +86,7 @@ class TransformerEncoderBase(FairseqEncoder):
             self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-        self.layers.extend([self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)])
+        self.layers.extend([self.build_encoder_layer(cfg, layer_idx=i) for i in range(cfg.encoder.layers)])
         if cfg.encoder.layers_to_share:
             layers_to_share = list(map(int, cfg.encoder.layers_to_share.split(",")))
             assert set(layers_to_share) == set(
@@ -101,8 +101,9 @@ class TransformerEncoderBase(FairseqEncoder):
         else:
             self.layer_norm = None
 
-    def build_encoder_layer(self, cfg):
-        layer = transformer_layer.TransformerEncoderLayerBase(cfg)
+    def build_encoder_layer(self, cfg, layer=None, layer_idx=None):
+        if layer is None:
+            layer = transformer_layer.TransformerEncoderLayerBase(cfg)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -350,10 +351,8 @@ class TransformerEncoder(TransformerEncoderBase):
             embed_tokens,
         )
 
-    def build_encoder_layer(self, args):
-        return super().build_encoder_layer(
-            TransformerConfig.from_namespace(args),
-        )
+    def build_encoder_layer(self, args, layer=None):
+        return super().build_encoder_layer(TransformerConfig.from_namespace(args), layer=layer)
 
 
 class LSTransformerEncoder(FairseqEncoder):
