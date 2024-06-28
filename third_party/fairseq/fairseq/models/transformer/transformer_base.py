@@ -170,7 +170,7 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
         src_tokens,
         src_lengths,
         prev_output_tokens,
-        return_all_hiddens: bool = True,
+        return_all_hiddens: bool = False,
         features_only: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
