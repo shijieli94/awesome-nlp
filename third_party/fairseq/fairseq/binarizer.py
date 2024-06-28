@@ -262,7 +262,7 @@ class VocabularyDatasetBinarizer(Binarizer):
             id_list = [int(id_string) for id_string in id_strings]
             if self.reverse_order:
                 id_list.reverse()
-            if self.append_eos:
+            if self.append_eos and (len(id_list) == 0 or id_list[-1] != self.dict.eos()):
                 id_list.append(self.dict.eos())
             ids = torch.IntTensor(id_list)
         else:
