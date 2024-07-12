@@ -721,6 +721,9 @@ class Trainer(object):
         if self.quantizer is not None:
             self.quantizer.begin_epoch(epoch)
 
+        if hasattr(self.model, "quantizer") and hasattr(self.model.quantizer, "begin_epoch"):
+            self.model.quantizer.begin_epoch(epoch)
+
         # task specific setup per epoch
         self.task.begin_epoch(epoch, self.get_model())
 
@@ -1178,6 +1181,8 @@ class Trainer(object):
         self.lr_step_update()
         if self.quantizer:
             self.quantizer.step_update(self._num_updates)
+        if hasattr(self.model, "quantizer") and hasattr(self.model.quantizer, "step_update"):
+            self.model.quantizer.step_update(self._num_updates)
         metrics.log_scalar("num_updates", self._num_updates, weight=0, priority=200)
 
     def clip_grad_norm(self, clip_norm):
