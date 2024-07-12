@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import logging
 from dataclasses import dataclass, field
 
 import torch
@@ -21,7 +22,11 @@ from fairseq.models.nat.fairseq_nat_model import (
 from fairseq.models.transformer import Embedding, TransformerConfig
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
 
+logger = logging.getLogger(__name__)
+
+
 LENGTH_PRED_METHOD_CHOICES = ChoiceEnum(["mean", "bert", "none"])
+EMBED_COPY_METHOD_CHOICES = ChoiceEnum(["uniform", "softcopy", "interpolate"])
 
 
 def _mean_pooling(enc_feats, src_masks):
@@ -39,7 +44,10 @@ def _argmax(x, dim):
     return (x == x.max(dim, keepdim=True)[0]).type_as(x)
 
 
-def _uniform_assignment(src_lens, trg_lens):
+def _uniform_assignment(src_mask, tgt_mask):
+    src_lens = src_mask.sum(1)
+    trg_lens = tgt_mask.sum(1)
+
     max_trg_len = trg_lens.max()
     steps = (src_lens.float() - 1) / (trg_lens.float() - 1)  # step-size
     # max_trg_len
@@ -49,12 +57,51 @@ def _uniform_assignment(src_lens, trg_lens):
     return index_t
 
 
+def _softcopy_assignment(src_mask, tgt_mask, tau=0.3):
+    src_lens = src_mask.sum(1)
+    trg_lens = tgt_mask.sum(1)
+
+    max_trg_len = trg_lens.max()
+    max_src_len = src_lens.max()
+
+    index_t = utils.new_arange(trg_lens, max_trg_len).float()
+    index_s = utils.new_arange(src_lens, max_src_len).float()
+    diff = (index_t[:, None] - index_s[None, :]).abs()  # max_trg_len, max_src_len
+    diff = diff[None, :, :].expand(trg_lens.size(0), -1, -1)
+
+    index = (-diff / tau).masked_fill(~src_mask.unsqueeze(1), float("-inf"))
+    return index.softmax(-1)
+
+
+def _interpolate_assignment(src_mask, tgt_mask, tau=0.3, epsilon=1e-4):
+    src_lens = src_mask.sum(1)
+    trg_lens = tgt_mask.sum(1)
+
+    max_trg_len = trg_lens.max()
+    max_src_len = src_lens.max()
+    steps = (src_lens.float() - 1) / (trg_lens.float() - 1)  # step-size
+    # max_trg_len
+    index_t = utils.new_arange(trg_lens, max_trg_len).float()
+    index_t = steps[:, None] * index_t[None, :]  # batch x max_trg_len
+
+    index_s = utils.new_arange(src_lens, max_src_len).float()
+    index = (index_s[None, None, :] - index_t[:, :, None]) ** 2
+    index = (-index / tau).masked_fill(~src_mask.unsqueeze(1), float("-inf"))
+    return index.softmax(dim=-1)
+
+
 @dataclass
 class NATransformerConfig(TransformerConfig):
     apply_bert_init: bool = field(default=False, metadata={"help": "use custom param initialization for BERT"})
     # length prediction
     src_embedding_copy: bool = field(
         default=False, metadata={"help": "copy encoder word embeddings as the initial input of the decoder"}
+    )
+    src_hidden_copy: bool = field(
+        default=False, metadata={"help": "copy encoder hidden states as the initial input of the decoder"}
+    )
+    embed_copy_method: EMBED_COPY_METHOD_CHOICES = field(
+        default="uniform", metadata={"help": "how to copy the source embeddings"}
     )
     pred_length_offset: bool = field(
         default=False, metadata={"help": "predicting the length difference between the target and source sentences"}
@@ -105,7 +152,7 @@ class NATransformerModel(FairseqNATModel):
             normalize=False,
             prev_output_tokens=prev_output_tokens,
             encoder_out=encoder_out,
-            embedding_copy=self.cfg.src_embedding_copy,
+            embedding_copy=self.cfg.src_embedding_copy or self.cfg.src_hidden_copy,
         )
 
         return {
@@ -135,7 +182,7 @@ class NATransformerModel(FairseqNATModel):
             normalize=True,
             prev_output_tokens=output_tokens,
             encoder_out=encoder_out,
-            embedding_copy=self.cfg.src_embedding_copy,
+            embedding_copy=self.cfg.src_embedding_copy or self.src_hidden_copy,
         )
         _scores, _tokens = model_output.max(-1)
 
@@ -410,7 +457,11 @@ class NATransformerDecoder(FairseqNATDecoder):
         return x, decoder_padding_mask
 
     def forward_copying_source(self, encoder_out, prev_output_tokens):
-        src_embed = encoder_out["encoder_embedding"][0]
+        src_embed = (
+            encoder_out["encoder_embedding"][0]
+            if self.cfg.src_embedding_copy
+            else encoder_out["encoder_out"][0].transpose(0, 1)
+        )
         if len(encoder_out["encoder_padding_mask"]) > 0:
             src_mask = encoder_out["encoder_padding_mask"][0]
         else:
@@ -418,17 +469,27 @@ class NATransformerDecoder(FairseqNATDecoder):
         src_mask = ~src_mask if src_mask is not None else prev_output_tokens.new_ones(*src_embed.size()[:2]).bool()
         tgt_mask = prev_output_tokens.ne(self.padding_idx)
 
-        length_sources = src_mask.sum(1)
-        length_targets = tgt_mask.sum(1)
-        mapped_inputs = _uniform_assignment(length_sources, length_targets)
-        if not all(src_mask[:, 0]):  # left-padded
-            mapped_inputs += (length_sources.max() - length_sources)[:, None]
-        mapped_inputs = mapped_inputs.masked_fill(~tgt_mask, 0)
-        copied_embedding = torch.gather(
-            src_embed,
-            1,
-            mapped_inputs.unsqueeze(-1).expand(*mapped_inputs.size(), src_embed.size(-1)),
-        )
+        if not src_mask[:, 0].all():
+            logger.warning(
+                "left-padded source tokens can result in wrong copied decoder input."
+                "Please use --left-pad-source to disable this feature!"
+            )
+
+        if self.cfg.embed_copy_method == "uniform":
+            mapped_inputs = _uniform_assignment(src_mask, tgt_mask).masked_fill(~tgt_mask, 0)
+            copied_embedding = torch.gather(
+                src_embed,
+                1,
+                mapped_inputs.unsqueeze(-1).expand(*mapped_inputs.size(), src_embed.size(-1)),
+            )
+        elif self.cfg.embed_copy_method == "softcopy":
+            mapped_inputs = _softcopy_assignment(src_mask, tgt_mask).to(dtype=src_embed.dtype)
+            copied_embedding = torch.bmm(mapped_inputs, src_embed)
+
+        elif self.cfg.embed_copy_method == "interpolate":
+            mapped_inputs = _interpolate_assignment(src_mask, tgt_mask).to(dtype=src_embed.dtype)
+            copied_embedding = torch.bmm(mapped_inputs, src_embed)
+
         return copied_embedding
 
     def forward_length_prediction(self, length_out, encoder_out, tgt_tokens=None, beam_size=1):
