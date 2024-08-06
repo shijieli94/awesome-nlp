@@ -1,0 +1,18 @@
+hydra:
+  job:
+    chdir: false
+
+defaults:
+    - _self_
+    - fairseq_config
+    - task: null
+    - model: null
+    - criterion: label_smoothed_cross_entropy
+    - optimizer: null
+    - lr_scheduler: fixed
+    - bpe: null
+    - tokenizer: null
+    - scoring: null
+    - generation: null
+    - common_eval: null
+    - eval_lm: null
