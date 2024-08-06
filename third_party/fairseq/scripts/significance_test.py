@@ -11,6 +11,7 @@ import sys
 from collections import defaultdict
 
 from sacrebleu import BLEU
+from sacrebleu.metrics.base import Metric, Score
 from sacrebleu.significance import PairedTest
 
 logging.basicConfig(
@@ -21,6 +22,42 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("awesome_nlp")
+
+
+class SentenceScore(Score):
+    def __init__(self, name, score):
+        super().__init__(name, score)
+
+
+class SentenceMetrics(Metric):
+    def __init__(self, name, num_refs=None, scale=1):
+        super().__init__()
+        self.name = name
+        self.num_refs = num_refs
+        self.scale = scale
+
+    def _cache_references(self, references):
+        return "dummy"
+
+    def _extract_corpus_statistics(self, hypotheses, references):
+        return hypotheses
+
+    def _aggregate_and_compute(self, stats):
+        if self.num_refs is None:
+            self.num_refs = len(stats)
+        return SentenceScore(self.name, sum(stats) / self.num_refs * self.scale)
+
+    def _compute_score_from_stats(self, stats):
+        return SentenceScore(self.name, stats / self.num_refs * self.scale)
+
+    def _compute_segment_statistics(self, hypothesis, ref_kwargs):
+        pass
+
+    def _extract_reference_info(self, refs):
+        pass
+
+    def _preprocess_segment(self, sent):
+        pass
 
 
 def parse_args():
@@ -84,6 +121,7 @@ def cli_main():
     if "sacrebleu" in args.metrics:
         assert args.trg_lang is not None, "trg_lang is required for sacrebleu"
         logger.info("-" * 20 + " SACREBLEU " + "-" * 20)
+        # let sacrebleu decides the tokenizer used given the target language
         metric = BLEU(references=[statics[args.baseline]["DT"]], tokenize=None, trg_lang=args.trg_lang)
 
         named_systems = []
@@ -115,6 +153,26 @@ def cli_main():
             n_samples=args.n_samples,
         )
         scores["tokBLEU"] = score()
+
+    if "bertscore" in args.metrics:
+        logger.info(_headline("-" * 20 + " Bertscore " + "-" * 20))
+        metric = SentenceMetrics(name="bertscore", scale=100)
+
+        named_systems = []
+        for system in named_systems_status:
+            bertscore_file = _format_filename(system).replace(".txt", ".bertscore")
+            with open(bertscore_file, "r", encoding="utf8") as f:
+                _statics = [float(line.strip()) for line in f.readlines()]
+            named_systems.append((system, _statics))
+
+        score = PairedTest(
+            named_systems,
+            metrics={"Bertscore": metric},
+            references="dummy",
+            test_type=args.test_type,
+            n_samples=args.n_samples,
+        )
+        scores["bertscore"] = score()
 
     logger.info("*" * 30 + " FINAL RESULTS " + "*" * 30)
     for name, (signature, results) in scores.items():
