@@ -118,3 +118,20 @@ class TransformerWMT14(TransformerIWSLT14):
             }
         )
         return configs
+
+
+@register_tasks(*augment_distilled("wmt17_en_zh", "wmt17_zh_en"))
+class TransformerWMT17(TransformerWMT14):
+    @property
+    def train(self):
+        configs = super().train
+        configs.update(
+            {
+                # model
+                "--share-all-embeddings": False,
+                "--share-decoder-input-output-embed": True,
+                # optimization
+                "_debug_::--max-update": ("50000", "20"),
+            }
+        )
+        return configs
