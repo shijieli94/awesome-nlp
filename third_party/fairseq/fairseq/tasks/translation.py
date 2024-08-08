@@ -485,7 +485,7 @@ class TranslationTask(FairseqTask):
         return self.tgt_dict
 
     def _inference_with_bleu(self, generator, sample, model):
-        def decode(toks, escape_unk=False):
+        def decode(toks, unk_string=None):
             s = self.tgt_dict.string(
                 toks.int().cpu(),
                 self.cfg.eval_bleu_remove_bpe,
@@ -494,21 +494,21 @@ class TranslationTask(FairseqTask):
                 # BLEU scores. Instead, we use a somewhat more verbose
                 # alternative that is unlikely to appear in the real
                 # reference, but doesn't get split into multiple tokens.
-                unk_string=("UNKNOWNTOKENINREF" if escape_unk else "UNKNOWNTOKENINHYP"),
+                unk_string=unk_string,
                 extra_symbols_to_ignore=self.tgt_dict.extra() if self.cfg.decode_remove_special_tokens else None,
             )
-            if self.tokenizer:
+            if self.tokenizer and not self.cfg.eval_tokenized_bleu:
                 s = self.tokenizer.decode(s)
             return s
 
         gen_out = self.inference_step(generator, [model], sample, prefix_tokens=None)
         hyps, refs = [], []
         for i in range(len(gen_out)):
-            hyps.append(decode(gen_out[i][0]["tokens"]))
+            hyps.append(decode(gen_out[i][0]["tokens"], unk_string="UNKNOWNTOKENINHYP"))
             refs.append(
                 decode(
                     utils.strip_pad(sample["target"][i], self.tgt_dict.pad()),
-                    escape_unk=True,  # don't count <unk> as matches to the hypo
+                    unk_string="UNKNOWNTOKENINREF",  # don't count <unk> as matches to the hypo
                 )
             )
         if self.cfg.eval_bleu_print_samples:
