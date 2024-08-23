@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 
-from awesome_nlp import DATASET_DIR, ConfigRegistry
+from awesome_nlp import DATASETS_DIR, ConfigRegistry
 from awesome_nlp.fairseq import Dataset, augment_name
 
 logger = logging.getLogger(__name__)
@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 @Dataset.register(*augment_name("wmt14_en_de", "wmt14_de_en", suffix="-distilled"))
 class WMT2014ENDE(Dataset):
-    PATH = os.path.join(DATASET_DIR, "fairseq", "wmt14_ende")
-    HF_PATH = "shijli/wmt14_ende"
+    NAME = "fairseq_wmt14_ende"
+    HF_PATH = "shijli/fairseq_wmt14_ende"
     TOKENIZER = "moses"
     BPE = "subword_nmt"
     DESCRIPTION = None
@@ -21,7 +21,7 @@ class WMT2014ENDE(Dataset):
         if "-distilled" not in task:
             task = "wmt14_en_de"  # en-de and de-en use the same dataset
 
-        task_dir = os.path.join(cls.PATH, task)
+        task_dir = os.path.join(DATASETS_DIR, cls.NAME, task)
         os.makedirs(task_dir, exist_ok=True)
 
         binarized_dir = os.path.join(task_dir, "binarized-joined" if joined else "binarized")

@@ -2,7 +2,7 @@ import logging
 import os
 import shutil
 
-from awesome_nlp import DATASET_DIR, ConfigRegistry
+from awesome_nlp import DATASETS_DIR, ConfigRegistry
 from awesome_nlp.fairseq import Dataset, augment_name
 
 logger = logging.getLogger(__name__)
@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 @Dataset.register(*augment_name("iwslt14_de_en", "iwslt14_en_de", suffix="-distilled"))
 class IWSLT2014DEEN(Dataset):
-    PATH = os.path.join(DATASET_DIR, "fairseq", "iwslt14_deen")
-    HF_PATH = "shijli/iwslt14_deen"
+    NAME = "fairseq_iwslt14_deen"
+    HF_PATH = "shijli/fairseq_iwslt14_deen"
     TOKENIZER = "moses"
     BPE = "subword_nmt"
     DESCRIPTION = "preprocessed with the script `prepare-iwslt14.sh` from fairseq"
@@ -21,7 +21,7 @@ class IWSLT2014DEEN(Dataset):
         if "-distilled" not in task:
             task = "iwslt14_de_en"  # name for raw dataset
 
-        task_dir = os.path.join(cls.PATH, task)
+        task_dir = os.path.join(DATASETS_DIR, cls.NAME, task)
         os.makedirs(task_dir, exist_ok=True)
 
         binarized_dir = os.path.join(task_dir, "binarized-joined" if joined else "binarized")

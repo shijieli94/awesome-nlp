@@ -6,6 +6,7 @@ import datasets
 
 from awesome_nlp import (
     CONFIG_REGISTRY,
+    DATASETS_DIR,
     DEBUG_MODE,
     EXPERIMENT_DIR,
     WANDB_DISABLED,
@@ -25,7 +26,7 @@ def augment_name(*names, suffix):
 
 
 class Dataset:
-    PATH: str  # string for storing downloaded dataset
+    NAME: str  # unique name for saving
     HF_PATH: str  # Huggingface URL
     TOKENIZER: str  # tokenizer used during preprocessing
     BPE: str  # subword encoding used during preprocessing
@@ -62,7 +63,7 @@ class Dataset:
 
     @classmethod
     def _get_extracted_dir(cls, task):
-        dataset_builder = datasets.load_dataset_builder(cls.HF_PATH, task, cache_dir=cls.PATH, token=True)
+        dataset_builder = datasets.load_dataset_builder(cls.HF_PATH, task, token=True, cache_dir=DATASETS_DIR)
 
         download_config = datasets.DownloadConfig(
             cache_dir=dataset_builder._cache_downloaded_dir,

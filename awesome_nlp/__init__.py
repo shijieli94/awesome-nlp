@@ -21,9 +21,9 @@ WANDB_DISABLED = os.environ.get("WANDB_DISABLED", "").upper() in ENV_VARS_TRUE_V
 # PATHS
 PROJECT_DIR = Path(__file__).parents[1]
 
-EXPERIMENT_DIR = Path(PROJECT_DIR, "experiments").as_posix()
-DATASET_DIR = Path(Path.home(), "Data", "datasets").as_posix()
-TRANSFORMERS_DIR = Path(Path.home(), "Data", ".cache", "transformers").as_posix()
+EXPERIMENT_DIR: str = Path(PROJECT_DIR, "experiments").as_posix()
+DATASETS_DIR: str = Path(Path.home(), "Data", ".cache", "datasets").as_posix()
+TRANSFORMERS_DIR: str = Path(Path.home(), "Data", ".cache", "transformers").as_posix()
 
 
 # ---------------------------------------- REGISTRIES ----------------------------------------#
