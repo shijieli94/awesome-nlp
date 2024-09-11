@@ -8,7 +8,7 @@ from awesome_nlp.fairseq import Dataset, FairseqTask
 
 logger = logging.getLogger(__name__)
 
-TOKENIZER = ["_moses_"]
+TOKENIZER = ["_moses_", "_bert_"]
 BPE = ["_subword_nmt_"]
 
 

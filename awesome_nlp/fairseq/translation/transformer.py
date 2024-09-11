@@ -58,8 +58,8 @@ class TransformerIWSLT14(FairseqTranslationTask):
                 "--keep-interval-updates": "5",
                 # tokenizer
                 "--tokenizer": "moses",
-                "_moses_::--source-lang": self.source_lang,
-                "_moses_::--target-lang": self.target_lang,
+                "_moses_::source_lang": self.source_lang,
+                "_moses_::target_lang": self.target_lang,
             }
         )
         return configs
@@ -74,8 +74,8 @@ class TransformerIWSLT14(FairseqTranslationTask):
                 "--lenpen": "1",
                 # tokenizer
                 "--tokenizer": "moses",
-                "_moses_::--source-lang": self.source_lang,
-                "_moses_::--target-lang": self.target_lang,
+                "--source-lang": self.source_lang,
+                "--target-lang": self.target_lang,
             }
         )
         return configs

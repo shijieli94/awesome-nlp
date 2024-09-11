@@ -79,8 +79,8 @@ class NATransformerIWSLT14(FairseqTranslationTask):
                 "--patience": "20",
                 # tokenizer
                 "--tokenizer": "moses",
-                "_moses_::--source-lang": self.source_lang,
-                "_moses_::--target-lang": self.target_lang,
+                "_moses_::source_lang": self.source_lang,
+                "_moses_::target_lang": self.target_lang,
             }
         )
         return configs
@@ -96,8 +96,8 @@ class NATransformerIWSLT14(FairseqTranslationTask):
                 "--iter-decode-with-beam": "1",
                 # tokenizer
                 "--tokenizer": "moses",
-                "_moses_::--source-lang": self.source_lang,
-                "_moses_::--target-lang": self.target_lang,
+                "--source-lang": self.source_lang,
+                "--target-lang": self.target_lang,
             }
         )
         return configs
