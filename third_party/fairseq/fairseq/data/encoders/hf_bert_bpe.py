@@ -6,17 +6,18 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from fairseq.data.encoders import register_bpe
+from fairseq.data.encoders import register_tokenizer
 from fairseq.dataclass import FairseqDataclass
 
 
 @dataclass
 class BertBPEConfig(FairseqDataclass):
     bpe_cased: bool = field(default=False, metadata={"help": "set for cased BPE"})
-    bpe_vocab_file: Optional[str] = field(default=None, metadata={"help": "bpe vocab file"})
+    bpe_model_name: str = field(default="bert-base-multilingual-cased", metadata={"help": "model name of huggingface"})
+    bpe_cache_dir: Optional[str] = field(default=None, metadata={"help": "cache dir of huggingface"})
 
 
-@register_bpe("bert", dataclass=BertBPEConfig)
+@register_tokenizer("bert", dataclass=BertBPEConfig)
 class BertBPE(object):
     def __init__(self, cfg):
         try:
@@ -24,11 +25,9 @@ class BertBPE(object):
         except ImportError:
             raise ImportError("Please install transformers with: pip install transformers")
 
-        if cfg.bpe_vocab_file:
-            self.bert_tokenizer = BertTokenizer(cfg.bpe_vocab_file, do_lower_case=not cfg.bpe_cased)
-        else:
-            vocab_file_name = "bert-base-cased" if cfg.bpe_cased else "bert-base-uncased"
-            self.bert_tokenizer = BertTokenizer.from_pretrained(vocab_file_name)
+        self.bert_tokenizer = BertTokenizer.from_pretrained(
+            cfg.bpe_model_name, do_lower_case=not cfg.bpe_cased, cache_dir=cfg.bpe_cache_dir
+        )
 
     def encode(self, x: str) -> str:
         return " ".join(self.bert_tokenizer.tokenize(x))
