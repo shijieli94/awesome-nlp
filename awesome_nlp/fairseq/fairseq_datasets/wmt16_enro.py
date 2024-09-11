@@ -3,12 +3,12 @@ import os
 import shutil
 
 from awesome_nlp import DATASETS_DIR, ConfigRegistry
-from awesome_nlp.fairseq import Dataset, augment_name
+from awesome_nlp.fairseq import Dataset, augment_suffix
 
 logger = logging.getLogger(__name__)
 
 
-@Dataset.register(*augment_name("wmt16_en_ro", "wmt16_ro_en", suffix="-distilled"))
+@Dataset.register(*augment_suffix("wmt16_en_ro", "wmt16_ro_en", suffix="-distilled", append=True))
 class WMT2016ENRO(Dataset):
     NAME = "fairseq_wmt16_enro"
     HF_PATH = "shijli/fairseq_wmt16_enro"

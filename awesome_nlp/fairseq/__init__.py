@@ -21,8 +21,12 @@ OPTIMIZER = ["_adam_", "_nag_", "_adagrad_"]
 LR_SCHEDULER = ["_inverse_sqrt_", "_polynomial_decay_", "_fixed_"]
 
 
-def augment_name(*names, suffix):
-    return list(names) + [f"{name}{suffix}" for name in names]
+def augment_suffix(*names, suffix, append=False):
+    return list(f"{name}{suffix}" for name in names) + (list(names) if append else [])
+
+
+def augment_prefix(*names, prefix, append=False):
+    return list(f"{prefix}{name}" for name in names) + (list(names) if append else [])
 
 
 class Dataset:
@@ -62,8 +66,10 @@ class Dataset:
         raise NotImplementedError(f"Please implement the `_load` method in the {cls.__name__} class.")
 
     @classmethod
-    def _get_extracted_dir(cls, task):
-        dataset_builder = datasets.load_dataset_builder(cls.HF_PATH, task, token=True, cache_dir=DATASETS_DIR)
+    def _get_extracted_dir(cls, *args, **kwargs):
+        dataset_builder = datasets.load_dataset_builder(
+            cls.HF_PATH, *args, **kwargs, token=True, cache_dir=DATASETS_DIR
+        )
 
         download_config = datasets.DownloadConfig(
             cache_dir=dataset_builder._cache_downloaded_dir,
