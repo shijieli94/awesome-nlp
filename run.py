@@ -164,4 +164,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import dotenv
+
+    dotenv.load_dotenv(dotenv_path=".env", override=True)
+
     main()
