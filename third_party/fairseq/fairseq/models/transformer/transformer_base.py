@@ -101,6 +101,7 @@ class TransformerModelBase(FairseqEncoderDecoderModel):
     @classmethod
     def build_model(cls, cfg, task):
         """Build a new model instance."""
+        cfg = TransformerConfig.from_namespace(cfg)
 
         if cfg.encoder.layers_to_keep:
             cfg.encoder.layers = len(cfg.encoder.layers_to_keep.split(","))

@@ -238,7 +238,7 @@ class NATransformerModel(FairseqNATModel):
 class NATransformerEncoder(FairseqNATEncoder):
     def __init__(self, cfg, dictionary, embed_tokens):
         super().__init__(cfg, dictionary, embed_tokens)
-        if cfg.length_pred_method == "bert":
+        if getattr(cfg, "length_pred_method", "mean") == "bert":
             self.length_token = Embedding(1, embed_tokens.embedding_dim, None)
         else:
             self.length_token = None
@@ -322,9 +322,12 @@ class NATransformerDecoder(FairseqNATDecoder):
         self.eos = dictionary.eos()
         self.pad = dictionary.pad()
 
-        if cfg.length_pred_method != "none":
+        self.length_pred_method = getattr(cfg, "length_pred_method", "mean")
+        self.pred_length_offset = getattr(cfg, "pred_length_offset", False)
+
+        if self.length_pred_method != "none":
             self.embed_length = Embedding(
-                256 if cfg.pred_length_offset else self.max_positions(), cfg.encoder.embed_dim, None
+                256 if self.pred_length_offset else self.max_positions(), cfg.encoder.embed_dim, None
             )
 
     @ensemble_decoder
@@ -343,14 +346,14 @@ class NATransformerDecoder(FairseqNATDecoder):
 
     @ensemble_decoder
     def forward_length(self, normalize, encoder_out):
-        if self.cfg.length_pred_method == "mean":
+        if self.length_pred_method == "mean":
             enc_feats = encoder_out["encoder_out"][0]  # T x B x C
             if len(encoder_out["encoder_padding_mask"]) > 0:
                 src_masks = encoder_out["encoder_padding_mask"][0]  # B x T
             else:
                 src_masks = None
             enc_feats = _mean_pooling(enc_feats, src_masks)
-        elif self.cfg.length_pred_method == "bert":
+        elif self.length_pred_method == "bert":
             enc_feats = encoder_out["encoder_out"][1]
 
         if self.cfg.sg_length_pred:
